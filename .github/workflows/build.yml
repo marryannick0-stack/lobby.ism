@@ -1,0 +1,69 @@
+# Builds the Android test app and checks the server on every push.
+# The finished APK is attached to the run and published as a pre-release,
+# so it can be downloaded straight onto a phone.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Unit tests and debug APK
+        working-directory: android
+        run: gradle --no-daemon --stacktrace testDebugUnitTest assembleDebug
+
+      - name: Name the APK after the build number
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk lobbyism-${{ github.run_number }}.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lobbyism-apk
+          path: lobbyism-${{ github.run_number }}.apk
+          if-no-files-found: error
+
+      - name: Publish as pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "build-${{ github.run_number }}" "lobbyism-${{ github.run_number }}.apk"
+          --prerelease
+          --title "Testbuild ${{ github.run_number }}"
+          --notes "Automatischer Testbuild aus Commit ${{ github.sha }}."
+
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Type-check and build the server module
+        working-directory: server
+        run: |
+          npm ci
+          npm run build
+          test -s build/index.js

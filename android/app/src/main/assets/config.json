@@ -1,0 +1,35 @@
+{
+  "materializeRadiusM": 8.0,
+  "materializeRadiusMaxM": 25.0,
+  "materializeHysteresis": 1.6,
+  "pillarMaxDistanceM": 150.0,
+  "scanRadiusM": 300.0,
+
+  "pinDistanceM": 2.5,
+  "pinDistanceMinM": 1.5,
+  "pinDistanceMaxM": 6.0,
+  "cameraHeightM": 1.4,
+  "nodeHoverM": 1.0,
+
+  "lockAngleDeg": 7.0,
+  "lockTimeS": 1.1,
+  "lockDecayS": 0.6,
+
+  "headingMinSpeedMps": 0.9,
+  "headingMaxCourseAccuracyDeg": 40.0,
+  "headingSamplesNeeded": 6,
+  "headingSmoothing": 0.15,
+
+  "gpsIntervalMs": 1000,
+  "placeMaxAccuracyM": 30.0,
+  "positionSmoothing": 0.35,
+
+  "textMaxChars": 500,
+
+  "syncIntervalS": 20,
+  "httpTimeoutMs": 8000,
+
+  "layerScale": 0.5,
+  "nodePointCount": 900,
+  "nodeSizeM": 0.45
+}

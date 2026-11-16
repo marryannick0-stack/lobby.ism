@@ -1,0 +1,13 @@
+# Build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+server/node_modules/
+server/build/
+server/.env
+# Editors / OS
+.idea/
+*.iml
+.DS_Store
+Thumbs.db

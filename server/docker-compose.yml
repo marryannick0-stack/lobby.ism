@@ -1,0 +1,53 @@
+# LOBBYISM server: Nakama (game server) + PostgreSQL with PostGIS (geo database).
+# Start:  cp .env.example .env   (edit the values)   then   npm install && npm run build && docker compose up -d
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nakama
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nakama"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    # The database is deliberately NOT published to the internet: only Nakama talks to it.
+
+  nakama:
+    # Check https://github.com/heroiclabs/nakama/releases for the current version before going live.
+    image: registry.heroiclabs.com/heroiclabs/nakama:3.24.2
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - "/bin/sh"
+      - "-ec"
+      - >
+        /nakama/nakama migrate up --database.address "postgres:${POSTGRES_PASSWORD}@postgres:5432/nakama" &&
+        exec /nakama/nakama
+        --name lobbyism1
+        --database.address "postgres:${POSTGRES_PASSWORD}@postgres:5432/nakama"
+        --logger.level INFO
+        --runtime.js_entrypoint "build/index.js"
+        --runtime.http_key "${NAKAMA_HTTP_KEY:?}"
+        --socket.server_key "${NAKAMA_SERVER_KEY:?}"
+        --session.encryption_key "${NAKAMA_SESSION_KEY:?}"
+        --session.refresh_encryption_key "${NAKAMA_REFRESH_KEY:?}"
+        --session.token_expiry_sec 7200
+        --console.username "${NAKAMA_CONSOLE_USER:?}"
+        --console.password "${NAKAMA_CONSOLE_PASSWORD:?}"
+    volumes:
+      # The compiled server module (created by "npm run build").
+      - ./build:/nakama/data/modules/build:ro
+    ports:
+      # API used by the app.
+      - "7350:7350"
+      # Admin console: reachable only from the server itself (use an SSH tunnel).
+      - "127.0.0.1:7351:7351"
+
+volumes:
+  pgdata:

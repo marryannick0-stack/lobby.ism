@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["es5"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noUnusedLocals": true,
+    "noImplicitReturns": true,
+    "removeComments": false,
+    "outFile": "./build/index.js",
+    "typeRoots": ["./node_modules"],
+    "types": []
+  },
+  "files": [
+    "./node_modules/nakama-runtime/index.d.ts",
+    "./src/config.ts",
+    "./src/nodes.ts",
+    "./src/main.ts"
+  ]
+}
