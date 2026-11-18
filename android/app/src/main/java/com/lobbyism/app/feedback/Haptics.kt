@@ -22,6 +22,8 @@ class Haptics(context: Context) : SensoryFeedback.Listener {
             SensoryFeedback.Cue.NODE_MATERIALIZED -> oneShot(25, 110)
             SensoryFeedback.Cue.NODE_PLACED ->
                 VibrationEffect.createWaveform(longArrayOf(0, 20, 60, 20, 60, 60), intArrayOf(0, 120, 0, 170, 0, 255), -1)
+            SensoryFeedback.Cue.STEP_DONE ->
+                VibrationEffect.createWaveform(longArrayOf(0, 25, 70, 45), intArrayOf(0, 150, 0, 230), -1)
             SensoryFeedback.Cue.DENIED ->
                 VibrationEffect.createWaveform(longArrayOf(0, 40, 50, 40), intArrayOf(0, 140, 0, 140), -1)
         }

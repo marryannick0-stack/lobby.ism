@@ -25,6 +25,7 @@ class SignalAudio : SensoryFeedback.Listener {
             tracks[SensoryFeedback.Cue.LOCK_COMPLETE] = build(lockIn())
             tracks[SensoryFeedback.Cue.NODE_PLACED] = build(sonarPing(freq = 220.0, lengthS = 0.8))
             tracks[SensoryFeedback.Cue.DENIED] = build(noiseBurst())
+            tracks[SensoryFeedback.Cue.STEP_DONE] = build(sonarPing(freq = 440.0, lengthS = 0.45))
         } catch (e: Exception) {
             // No audio output available: the app stays silent.
             release()

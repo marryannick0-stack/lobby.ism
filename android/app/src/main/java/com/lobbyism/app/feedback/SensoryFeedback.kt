@@ -23,6 +23,8 @@ object SensoryFeedback {
         NODE_PLACED,
         /** Something could not be done. */
         DENIED,
+        /** A tutorial step was completed. */
+        STEP_DONE,
     }
 
     fun interface Listener {

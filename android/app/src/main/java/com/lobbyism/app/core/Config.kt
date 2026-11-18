@@ -59,4 +59,7 @@ data class Config(
     val layerScale: Double = 0.5,
     val nodePointCount: Int = 900,
     val nodeSizeM: Double = 0.45,
+
+    // --- Tutorial ---
+    val tutorial: TutorialConfig = TutorialConfig(),
 )

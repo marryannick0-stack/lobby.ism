@@ -91,6 +91,7 @@ class ArRenderer(
             SensoryFeedback.Cue.NODE_MATERIALIZED -> 0.8f
             SensoryFeedback.Cue.LOCK_LOST, SensoryFeedback.Cue.DENIED -> 0.5f
             SensoryFeedback.Cue.LOCK_TICK -> maxOf(pulse, 0.15f)
+            SensoryFeedback.Cue.STEP_DONE -> maxOf(pulse, 0.4f)
         }
     }
 

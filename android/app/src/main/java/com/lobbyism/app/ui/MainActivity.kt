@@ -33,8 +33,10 @@ import com.lobbyism.app.camera.CameraFeed
 import com.lobbyism.app.core.Config
 import com.lobbyism.app.core.ContentStatus
 import com.lobbyism.app.core.ContentType
+import com.lobbyism.app.core.Geo
 import com.lobbyism.app.core.HeadingEstimator
 import com.lobbyism.app.core.Node
+import com.lobbyism.app.core.Tutorial
 import com.lobbyism.app.core.WorldTracker
 import com.lobbyism.app.data.ConfigLoader
 import com.lobbyism.app.data.NodeStore
@@ -70,6 +72,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
     private lateinit var sync: SyncEngine
     private lateinit var haptics: Haptics
     private lateinit var audio: SignalAudio
+    private lateinit var tutorial: Tutorial
 
     private lateinit var glView: GLSurfaceView
     private lateinit var hud: HudView
@@ -77,6 +80,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
     private lateinit var placeButton: Button
     private lateinit var blocker: LinearLayout
     private lateinit var blockerText: TextView
+    private lateinit var tutorialOverlay: TutorialOverlay
 
     private val main = Handler(Looper.getMainLooper())
     private var resumed = false
@@ -90,6 +94,12 @@ class MainActivity : Activity(), ArRenderer.Scene {
     @Volatile private var cameraTexture: SurfaceTexture? = null
     @Volatile private var syncStatus = SyncEngine.Status.LOCAL_ONLY
     @Volatile private var unsyncedCount = 0
+
+    /** true while the tutorial card is on screen (also during its final "done" card). */
+    @Volatile private var tutorialVisible = false
+    /** Last view handed to the UI thread, so unchanged frames post nothing. */
+    @Volatile private var lastTutorialView: Tutorial.View? = null
+    private var lastPlaceHighlight = false
 
     // ------------------------------------------------------------ lifecycle
 
@@ -114,6 +124,8 @@ class MainActivity : Activity(), ArRenderer.Scene {
         )
         haptics = Haptics(this)
         audio = SignalAudio()
+        tutorial = Tutorial(cfg.tutorial)
+        tutorialVisible = !settings.tutorialDone
 
         renderer = ArRenderer(cfg, orientation, camera.previewSize, camera.fovLongSideRad, this) { texture ->
             // GL thread: a (new) camera texture exists. Open the camera from the main thread.
@@ -210,11 +222,14 @@ class MainActivity : Activity(), ArRenderer.Scene {
                 is WorldTracker.Event.LockTick -> SensoryFeedback.emit(SensoryFeedback.Cue.LOCK_TICK, e.progress)
                 is WorldTracker.Event.Locked -> {
                     SensoryFeedback.emit(SensoryFeedback.Cue.LOCK_COMPLETE)
+                    if (tutorialVisible) tutorial.onNodeLocked(e.node.id)
                     main.post { showCard(e.node) }
                 }
                 is WorldTracker.Event.LockLost -> SensoryFeedback.emit(SensoryFeedback.Cue.LOCK_LOST, 0.5f)
             }
         }
+
+        val tutorialView = if (tutorialVisible) updateTutorial(dtS, fix, frame, forward, top) else null
 
         hud.state = HudView.State(
             gpsEnabled = location.isGpsEnabled,
@@ -230,8 +245,92 @@ class MainActivity : Activity(), ArRenderer.Scene {
             focusLock = frame?.focus?.lock,
             focusRevealed = frame?.focus?.revealed ?: false,
             sensorOk = orientation.isAvailable,
+            turnDeg = tutorialView?.turnDeg,
         )
         return frame?.views ?: emptyList()
+    }
+
+    /** GL thread: feeds the tutorial with this frame's measurements and hands its view to the UI thread. */
+    private fun updateTutorial(
+        dtS: Float,
+        fix: LocationTracker.Fix?,
+        frame: WorldTracker.Frame?,
+        forward: FloatArray,
+        top: FloatArray,
+    ): Tutorial.View {
+        val nodeId = tutorial.tutorialNodeId
+        val nodeView = frame?.views?.firstOrNull { it.node.id == nodeId }
+        val node = nodeId?.let { id -> nodes.firstOrNull { it.id == id } }
+
+        val distance = if (node != null && fix != null) Geo.distanceM(fix.lat, fix.lon, node.lat, node.lon) else null
+        val turn = nodeView?.let {
+            val facing = WorldTracker.sensorAzimuthDeg(WorldTracker.horizontalForward(forward, top))
+            val target = WorldTracker.sensorAzimuthDeg(it.pos)
+            Geo.wrap180(target - facing)
+        }
+
+        val view = tutorial.update(
+            dtS.toDouble(),
+            Tutorial.Snapshot(
+                hasFix = fix != null,
+                accuracyM = fix?.accuracyM ?: 99.0,
+                speedMps = fix?.speedMps ?: 0.0,
+                headingReady = headingOffsetDeg != null,
+                headingConfidence = headingConfidence.toDouble(),
+                tutorialNodeStage = nodeView?.stage,
+                tutorialNodeDistanceM = distance,
+                tutorialNodeTurnDeg = turn,
+            ),
+        )
+        if (tutorial.consumeCompletion()) SensoryFeedback.emit(SensoryFeedback.Cue.STEP_DONE)
+        // The turn angle changes every frame but is drawn by the HUD, not the card:
+        // compare without it so the UI thread only gets real changes.
+        val cardView = view.copy(turnDeg = null)
+        if (cardView != lastTutorialView) {
+            lastTutorialView = cardView
+            main.post { applyTutorialView(cardView) }
+        }
+        return view
+    }
+
+    /** Main thread. */
+    private fun applyTutorialView(view: Tutorial.View) {
+        if (!tutorialVisible) return
+        tutorialOverlay.visibility = View.VISIBLE
+        tutorialOverlay.show(view)
+        if (view.highlightPlace != lastPlaceHighlight) {
+            lastPlaceHighlight = view.highlightPlace
+            placeButton.text = if (view.highlightPlace) "▶ + HINTERLASSEN ◀" else "+ HINTERLASSEN"
+        }
+    }
+
+    private fun onTutorialPrimary() {
+        if (tutorial.step == Tutorial.Step.DONE) closeTutorial() else tutorial.onPrimary()
+    }
+
+    private fun onTutorialSecondary() {
+        if (tutorial.onSecondary()) {
+            settings.cameraRotationSteps = settings.cameraRotationSteps + 1
+            renderer.cameraRotationSteps = settings.cameraRotationSteps
+        }
+    }
+
+    private fun closeTutorial() {
+        tutorial.finish()
+        tutorialVisible = false
+        settings.tutorialDone = true
+        lastTutorialView = null
+        tutorialOverlay.visibility = View.GONE
+        lastPlaceHighlight = false
+        placeButton.text = "+ HINTERLASSEN"
+    }
+
+    private fun startTutorial() {
+        hideCard()
+        tutorial.restart()
+        lastTutorialView = null
+        tutorialVisible = true
+        tutorialOverlay.visibility = View.VISIBLE
     }
 
     /** Main thread: every GPS fix may teach the heading estimator where north is. */
@@ -296,9 +395,10 @@ class MainActivity : Activity(), ArRenderer.Scene {
             if (textValue.isEmpty()) toast("Leere Nachricht.") else toast("Signal verloren. Nichts abgelegt.")
             return
         }
+        val id = UUID.randomUUID().toString()
         store.insertLocal(
             Node(
-                id = UUID.randomUUID().toString(),
+                id = id,
                 lat = fix.lat,
                 lon = fix.lon,
                 contentType = ContentType.TEXT,
@@ -311,6 +411,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
         )
         reloadNodes()
         SensoryFeedback.emit(SensoryFeedback.Cue.NODE_PLACED)
+        if (tutorialVisible) tutorial.onNodePlaced(id)
         sync.requestSync()
     }
 
@@ -346,6 +447,19 @@ class MainActivity : Activity(), ArRenderer.Scene {
             card,
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM)
                 .apply { setMargins(dp(14), 0, dp(14), dp(96)) },
+        )
+
+        tutorialOverlay = TutorialOverlay(
+            this,
+            onPrimary = { onTutorialPrimary() },
+            onSecondary = { onTutorialSecondary() },
+            onSkip = { closeTutorial() },
+        ).apply { visibility = View.GONE }
+        root.addView(
+            tutorialOverlay,
+            // Below the HUD status lines, above the camera centre.
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP)
+                .apply { setMargins(dp(14), dp(128), dp(14), 0) },
         )
 
         placeButton = Button(this).apply {
@@ -451,6 +565,14 @@ class MainActivity : Activity(), ArRenderer.Scene {
                 renderer.cameraRotationSteps = settings.cameraRotationSteps
             }
         }
+        var dialog: AlertDialog? = null
+        val restartTutorial = Button(this).apply {
+            text = "Tutorial neu starten"
+            setOnClickListener {
+                dialog?.dismiss()
+                startTutorial()
+            }
+        }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(8), dp(20), 0)
@@ -458,8 +580,9 @@ class MainActivity : Activity(), ArRenderer.Scene {
             addView(key)
             addView(info)
             addView(rotate)
+            addView(restartTutorial)
         }
-        AlertDialog.Builder(this)
+        dialog = AlertDialog.Builder(this)
             .setTitle("Einstellungen")
             .setView(box)
             .setPositiveButton("Speichern") { _, _ ->

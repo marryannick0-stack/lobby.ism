@@ -184,3 +184,78 @@ class WorldTrackerTest {
         assertEquals(0f, dir[1], 1e-5f)
     }
 }
+
+class TutorialTest {
+    private fun snap(
+        fix: Boolean = true,
+        acc: Double = 5.0,
+        speed: Double = 0.0,
+        heading: Boolean = false,
+        stage: WorldTracker.Stage? = null,
+        dist: Double? = null,
+        turn: Double? = null,
+    ) = Tutorial.Snapshot(fix, acc, speed, heading, 0.0, stage, dist, turn)
+
+    @Test fun fullWalkAdvancesOnlyOnRealEvidence() {
+        val t = Tutorial()
+        assertEquals(Tutorial.Step.WELCOME, t.update(0.1, snap()).step)
+        t.onPrimary()
+        assertEquals(Tutorial.Step.CAMERA_CHECK, t.step)
+        assertTrue(t.onSecondary()) // rotate request keeps the step
+        assertEquals(Tutorial.Step.CAMERA_CHECK, t.step)
+        t.onPrimary()
+
+        // GPS: bad accuracy holds, good accuracy advances.
+        assertEquals(Tutorial.Step.GPS, t.update(1.0, snap(acc = 40.0)).step)
+        t.update(1.0, snap(acc = 8.0))
+        assertEquals(Tutorial.Step.NORTH, t.step)
+
+        // North: buttons do nothing, only a ready heading advances.
+        t.onPrimary()
+        assertEquals(Tutorial.Step.NORTH, t.update(1.0, snap(speed = 1.4)).step)
+        t.update(1.0, snap(heading = true))
+        assertEquals(Tutorial.Step.PLACE, t.step)
+
+        // Locking a foreign node before placing does nothing.
+        t.onNodeLocked("other")
+        t.onNodePlaced("n1")
+        assertEquals(Tutorial.Step.LOCK, t.step)
+        t.onNodeLocked("other")
+        assertEquals(Tutorial.Step.LOCK, t.step)
+        t.onNodeLocked("n1")
+        assertEquals(Tutorial.Step.LEAVE, t.step)
+
+        // Leave: pillar alone is not enough without real distance.
+        t.update(1.0, snap(heading = true, stage = WorldTracker.Stage.PILLAR, dist = 5.0))
+        assertEquals(Tutorial.Step.LEAVE, t.step)
+        t.update(1.0, snap(heading = true, stage = WorldTracker.Stage.PILLAR, dist = 22.0))
+        assertEquals(Tutorial.Step.FIND, t.step)
+
+        // Find: must face the pillar.
+        t.update(1.0, snap(heading = true, stage = WorldTracker.Stage.PILLAR, dist = 22.0, turn = 120.0))
+        assertEquals(Tutorial.Step.FIND, t.step)
+        t.update(1.0, snap(heading = true, stage = WorldTracker.Stage.PILLAR, dist = 22.0, turn = -8.0))
+        assertEquals(Tutorial.Step.RETURN, t.step)
+
+        t.onNodeLocked("n1")
+        assertEquals(Tutorial.Step.DONE, t.step)
+        assertFalse(t.isActive)
+    }
+
+    @Test fun completionIsReportedOnce() {
+        val t = Tutorial()
+        t.onPrimary()
+        assertTrue(t.consumeCompletion())
+        assertFalse(t.consumeCompletion())
+    }
+
+    @Test fun hintAppearsWhenStuckAndRestartResets() {
+        val t = Tutorial()
+        t.onPrimary(); t.onPrimary()
+        assertNull(t.update(10.0, snap(fix = false)).hint)
+        assertNotNull(t.update(40.0, snap(fix = false)).hint)
+        t.restart()
+        assertEquals(Tutorial.Step.WELCOME, t.step)
+        assertNull(t.tutorialNodeId)
+    }
+}

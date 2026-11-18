@@ -30,6 +30,10 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("intro_seen", false)
         set(v) = prefs.edit().putBoolean("intro_seen", v).apply()
 
+    var tutorialDone: Boolean
+        get() = prefs.getBoolean("tutorial_done", false)
+        set(v) = prefs.edit().putBoolean("tutorial_done", v).apply()
+
     val deviceId: String
         get() {
             prefs.getString("device_id", null)?.let { return it }

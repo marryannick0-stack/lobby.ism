@@ -39,6 +39,8 @@ class HudView(context: Context) : View(context) {
         val focusLock: Float?,
         val focusRevealed: Boolean,
         val sensorOk: Boolean,
+        /** Tutorial guidance: signed degrees to turn towards the tutorial node, or null. */
+        val turnDeg: Double? = null,
     )
 
     @Volatile var state: State? = null
@@ -74,6 +76,7 @@ class HudView(context: Context) : View(context) {
         if (s != null) {
             drawStatus(canvas, s, t)
             drawReticle(canvas, s, t)
+            s.turnDeg?.let { drawTurnHint(canvas, it, t) }
         }
         // Redraw every display frame: the reticle animates and the state changes constantly.
         postInvalidateOnAnimation()
@@ -183,7 +186,36 @@ class HudView(context: Context) : View(context) {
         }
     }
 
+    /**
+     * Chevrons left or right of the reticle pointing to where the player has to
+     * turn. Disappears once the target is roughly in view.
+     */
+    private fun drawTurnHint(canvas: Canvas, turnDeg: Double, t: Float) {
+        if (kotlin.math.abs(turnDeg) < TURN_HINT_MIN_DEG) return
+        val right = turnDeg > 0
+        val cx = width / 2f
+        val cy = height / 2f
+        val dir = if (right) 1f else -1f
+        val base = cx + dir * 70f * density
+        val size = 11f * density
+        // Three chevrons running outwards, like a sweep.
+        val phase = (t * 2.2f) % 1f
+        for (i in 0 until 3) {
+            val x = base + dir * i * 16f * density
+            val k = ((phase * 3f - i + 3f) % 3f) / 3f
+            line.alpha = (90 + 165 * (1f - k)).toInt()
+            canvas.drawLine(x, cy - size, x + dir * size, cy, line)
+            canvas.drawLine(x + dir * size, cy, x, cy + size, line)
+        }
+        line.alpha = 255
+        val label = "${kotlin.math.abs(turnDeg).toInt()}°"
+        val tw = text.measureText(label)
+        val lx = if (right) base + 60f * density else base - 60f * density - tw
+        canvas.drawText(label, lx, cy + text.textSize * 0.35f, text)
+    }
+
     private companion object {
+        const val TURN_HINT_MIN_DEG = 12.0
         /** Pale phosphor green-white. */
         const val PHOSPHOR = 0xFFCDFFDB.toInt()
         const val GHOST_RED = 0x55FF5A4A

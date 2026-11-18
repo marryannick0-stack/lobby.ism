@@ -31,5 +31,12 @@
 
   "layerScale": 0.5,
   "nodePointCount": 900,
-  "nodeSizeM": 0.45
+  "nodeSizeM": 0.45,
+
+  "tutorial": {
+    "gpsGoodAccuracyM": 15.0,
+    "minWalkSpeedMps": 0.9,
+    "leaveMinDistanceM": 15.0,
+    "findAngleDeg": 15.0
+  }
 }

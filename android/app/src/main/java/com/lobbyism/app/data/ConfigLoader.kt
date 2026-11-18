@@ -3,6 +3,7 @@ package com.lobbyism.app.data
 import android.content.Context
 import android.util.Log
 import com.lobbyism.app.core.Config
+import com.lobbyism.app.core.TutorialConfig
 import org.json.JSONObject
 
 /**
@@ -47,6 +48,17 @@ object ConfigLoader {
             layerScale = j.optDouble("layerScale", d.layerScale),
             nodePointCount = j.optInt("nodePointCount", d.nodePointCount),
             nodeSizeM = j.optDouble("nodeSizeM", d.nodeSizeM),
+            tutorial = loadTutorial(j.optJSONObject("tutorial"), d.tutorial),
+        )
+    }
+
+    private fun loadTutorial(j: JSONObject?, d: TutorialConfig): TutorialConfig {
+        if (j == null) return d
+        return TutorialConfig(
+            gpsGoodAccuracyM = j.optDouble("gpsGoodAccuracyM", d.gpsGoodAccuracyM),
+            minWalkSpeedMps = j.optDouble("minWalkSpeedMps", d.minWalkSpeedMps),
+            leaveMinDistanceM = j.optDouble("leaveMinDistanceM", d.leaveMinDistanceM),
+            findAngleDeg = j.optDouble("findAngleDeg", d.findAngleDeg),
         )
     }
 }
