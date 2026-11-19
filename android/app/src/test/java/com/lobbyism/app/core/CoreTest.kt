@@ -259,3 +259,57 @@ class TutorialTest {
         assertNull(t.tutorialNodeId)
     }
 }
+
+class HomeTrackerTest {
+    private val cfg = Config()
+    private fun dir(azDeg: Double, elDeg: Double = 0.0): FloatArray {
+        val a = Math.toRadians(azDeg); val e = Math.toRadians(elDeg)
+        return floatArrayOf((Math.sin(a) * Math.cos(e)).toFloat(), (Math.cos(a) * Math.cos(e)).toFloat(), Math.sin(e).toFloat())
+    }
+    private val up = floatArrayOf(0f, 0f, 1f)
+
+    @Test fun nothingUntilAligned() {
+        val h = HomeTracker(cfg)
+        assertNull(h.aimToPinAngles(dir(10.0)))
+        val pin = HomePin("p", "s", 0.0, 0.0, 2.0, "x", 0)
+        assertTrue(h.update(0.1f, dir(0.0), listOf(pin)).views.isEmpty())
+    }
+
+    @Test fun pinReturnsToTheSameRealDirectionAfterTheGyroFrameRotated() {
+        // Session 1: reference mark lies at sensor azimuth 30. Pin aimed at sensor azimuth 120, 20 deg up.
+        val h1 = HomeTracker(cfg)
+        h1.align(dir(30.0), up)
+        val angles = h1.aimToPinAngles(dir(120.0, 20.0))!!
+        assertEquals(90.0, angles[0], 1e-3)
+        assertEquals(20.0, angles[1], 1e-3)
+        val pin = HomePin("p", "s", angles[0], angles[1], 2.0, "x", 0)
+
+        // Session 2: the gyro frame is rotated by -100 deg, the same mark now lies at sensor azimuth -70.
+        val h2 = HomeTracker(cfg)
+        h2.align(dir(-70.0), up)
+        val pos = h2.update(0.1f, dir(0.0), listOf(pin)).views.single().pos
+        // Expected: 90 deg right of the mark = sensor azimuth 20, elevation 20.
+        val expected = dir(20.0, 20.0)
+        for (i in 0..2) assertEquals(expected[i] * 2f, pos[i], 1e-3f)
+    }
+
+    @Test fun freshPinDoesNotLockItselfUntilLookedAway() {
+        val h = HomeTracker(cfg)
+        h.align(dir(0.0), up)
+        val pin = HomePin("p", "s", 0.0, 0.0, 2.0, "x", 0)
+        h.suppressLock(pin)
+        var locked = false
+        repeat(180) { if (h.update(1f / 60f, dir(0.0), listOf(pin)).events.any { it is WorldTracker.Event.Locked }) locked = true }
+        assertFalse(locked)
+        repeat(10) { h.update(1f / 60f, dir(90.0), listOf(pin)) }
+        repeat(180) { if (h.update(1f / 60f, dir(0.0), listOf(pin)).events.any { it is WorldTracker.Event.Locked }) locked = true }
+        assertTrue(locked)
+    }
+
+    @Test fun idsAreRecognisable() {
+        val n = HomePin("abc", "s", 0.0, 0.0, 2.0, "x", 0).asNode()
+        assertTrue(HomePin.isHomeNodeId(n.id))
+        assertEquals("abc", HomePin.pinIdOf(n.id))
+        assertFalse(HomePin.isHomeNodeId("abc"))
+    }
+}

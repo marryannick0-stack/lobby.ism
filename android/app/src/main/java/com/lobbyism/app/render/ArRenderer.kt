@@ -279,6 +279,7 @@ class ArRenderer(
         val uPointSize = GLES20.glGetUniformLocation(p, "uPointSize")
         val uLock = GLES20.glGetUniformLocation(p, "uLock")
         val uColor = GLES20.glGetUniformLocation(p, "uColor")
+        val uPulseAmount = GLES20.glGetUniformLocation(p, "uPulseAmount")
         GLES20.glUniform1f(GLES20.glGetUniformLocation(p, "uTime"), time)
 
         // Size in pixels of a 1 m object at 1 m distance, for perspective point sizes.
@@ -297,8 +298,10 @@ class ArRenderer(
             Matrix.translateM(model, 0, v.pos[0], v.pos[1], v.pos[2])
             if (isNode) {
                 // The node stays in place; only its fragments turn slowly around the vertical axis.
-                Matrix.rotateM(model, 0, time * NODE_SPIN_DEG_PER_S, 0f, 0f, 1f)
-                val s = cfg.nodeSizeM.toFloat()
+                // Home pins turn slower still: personal, static (GDD: home = warm and calm).
+                val spin = if (v.home) HOME_SPIN_DEG_PER_S else NODE_SPIN_DEG_PER_S
+                Matrix.rotateM(model, 0, time * spin, 0f, 0f, 1f)
+                val s = (if (v.home) cfg.homeNodeSizeM else cfg.nodeSizeM).toFloat()
                 Matrix.scaleM(model, 0, s, s, s)
             }
             Matrix.multiplyMM(mvp, 0, vp, 0, model, 0)
@@ -309,7 +312,13 @@ class ArRenderer(
             GLES20.glUniform1f(uLock, v.lock)
             GLES20.glUniform1f(uPointSize, pixelsPerMetre * (if (isNode) NODE_POINT_M else PILLAR_POINT_M))
             // Pale phosphor, like an old sonar tube. Deliberately not neon.
-            if (isNode) GLES20.glUniform3f(uColor, 0.80f, 1.00f, 0.86f) else GLES20.glUniform3f(uColor, 0.62f, 0.80f, 0.70f)
+            // Home pins: warm amber. Told apart by colour AND by a calmer pulse (art constraint 12).
+            when {
+                v.home -> GLES20.glUniform3f(uColor, 1.00f, 0.80f, 0.55f)
+                isNode -> GLES20.glUniform3f(uColor, 0.80f, 1.00f, 0.86f)
+                else -> GLES20.glUniform3f(uColor, 0.62f, 0.80f, 0.70f)
+            }
+            GLES20.glUniform1f(uPulseAmount, if (v.home) 0.25f else 1f)
 
             GLES20.glDrawArrays(GLES20.GL_POINTS, 0, if (isNode) nodeVertexCount else pillarVertexCount)
         }
@@ -351,6 +360,7 @@ class ArRenderer(
         const val NODE_POINT_M = 0.014f
         const val PILLAR_POINT_M = 0.09f
         const val NODE_SPIN_DEG_PER_S = 9f
+        const val HOME_SPIN_DEG_PER_S = 3f
         const val PULSE_DECAY_S = 0.45f
         const val BASE_ABERRATION = 0.0022f
     }

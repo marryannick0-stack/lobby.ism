@@ -60,6 +60,11 @@ data class Config(
     val nodePointCount: Int = 900,
     val nodeSizeM: Double = 0.45,
 
+    // --- Home base ---
+    /** Distance at which a home pin hangs in front of the station. Only affects its size on screen. */
+    val homePinDistanceM: Double = 2.0,
+    val homeNodeSizeM: Double = 0.28,
+
     // --- Tutorial ---
     val tutorial: TutorialConfig = TutorialConfig(),
 )

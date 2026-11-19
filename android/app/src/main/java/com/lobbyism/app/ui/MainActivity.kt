@@ -35,6 +35,9 @@ import com.lobbyism.app.core.ContentStatus
 import com.lobbyism.app.core.ContentType
 import com.lobbyism.app.core.Geo
 import com.lobbyism.app.core.HeadingEstimator
+import com.lobbyism.app.core.HomePin
+import com.lobbyism.app.core.HomeStation
+import com.lobbyism.app.core.HomeTracker
 import com.lobbyism.app.core.Node
 import com.lobbyism.app.core.Tutorial
 import com.lobbyism.app.core.WorldTracker
@@ -73,6 +76,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
     private lateinit var haptics: Haptics
     private lateinit var audio: SignalAudio
     private lateinit var tutorial: Tutorial
+    private lateinit var homeTracker: HomeTracker
 
     private lateinit var glView: GLSurfaceView
     private lateinit var hud: HudView
@@ -81,6 +85,8 @@ class MainActivity : Activity(), ArRenderer.Scene {
     private lateinit var blocker: LinearLayout
     private lateinit var blockerText: TextView
     private lateinit var tutorialOverlay: TutorialOverlay
+    private lateinit var homeButton: Button
+    private lateinit var alignButton: Button
 
     private val main = Handler(Looper.getMainLooper())
     private var resumed = false
@@ -100,6 +106,17 @@ class MainActivity : Activity(), ArRenderer.Scene {
     /** Last view handed to the UI thread, so unchanged frames post nothing. */
     @Volatile private var lastTutorialView: Tutorial.View? = null
     private var lastPlaceHighlight = false
+
+    // --- home base (see core/HomeBase.kt) ---
+    @Volatile private var homeMode = false
+    @Volatile private var station: HomeStation? = null
+    @Volatile private var homePins: List<HomePin> = emptyList()
+
+    /** Latest pose, copied on the GL thread so the UI thread can aim with it. */
+    private val poseLock = Any()
+    private val lastForward = FloatArray(3)
+    private val lastTop = FloatArray(3)
+    private var hasPose = false
 
     // ------------------------------------------------------------ lifecycle
 
@@ -125,6 +142,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
         haptics = Haptics(this)
         audio = SignalAudio()
         tutorial = Tutorial(cfg.tutorial)
+        homeTracker = HomeTracker(cfg)
         tutorialVisible = !settings.tutorialDone
 
         renderer = ArRenderer(cfg, orientation, camera.previewSize, camera.fovLongSideRad, this) { texture ->
@@ -210,10 +228,19 @@ class MainActivity : Activity(), ArRenderer.Scene {
             lastSensorAzimuthDeg = WorldTracker.sensorAzimuthDeg(WorldTracker.horizontalForward(forward, top))
         }
 
-        val frame = if (poseValid) {
-            tracker.update(dtS, forward, top, fix?.lat, fix?.lon, fix?.accuracyM ?: 99.0, headingOffsetDeg, nodes)
-        } else {
-            null
+        if (poseValid) {
+            synchronized(poseLock) {
+                System.arraycopy(forward, 0, lastForward, 0, 3)
+                System.arraycopy(top, 0, lastTop, 0, 3)
+                hasPose = true
+            }
+        }
+
+        val inHome = homeMode
+        val frame = when {
+            !poseValid -> null
+            inHome -> homeTracker.update(dtS, forward, homePins)
+            else -> tracker.update(dtS, forward, top, fix?.lat, fix?.lon, fix?.accuracyM ?: 99.0, headingOffsetDeg, nodes)
         }
 
         frame?.events?.forEach { e ->
@@ -229,7 +256,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
             }
         }
 
-        val tutorialView = if (tutorialVisible) updateTutorial(dtS, fix, frame, forward, top) else null
+        val tutorialView = if (tutorialVisible && !inHome) updateTutorial(dtS, fix, frame, forward, top) else null
 
         hud.state = HudView.State(
             gpsEnabled = location.isGpsEnabled,
@@ -246,6 +273,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
             focusRevealed = frame?.focus?.revealed ?: false,
             sensorOk = orientation.isAvailable,
             turnDeg = tutorialView?.turnDeg,
+            homeLines = if (inHome) homeStatusLines(frame?.views?.size ?: 0) else null,
         )
         return frame?.views ?: emptyList()
     }
@@ -295,7 +323,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
 
     /** Main thread. */
     private fun applyTutorialView(view: Tutorial.View) {
-        if (!tutorialVisible) return
+        if (!tutorialVisible || homeMode) return
         tutorialOverlay.visibility = View.VISIBLE
         tutorialOverlay.show(view)
         if (view.highlightPlace != lastPlaceHighlight) {
@@ -322,7 +350,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
         lastTutorialView = null
         tutorialOverlay.visibility = View.GONE
         lastPlaceHighlight = false
-        placeButton.text = "+ HINTERLASSEN"
+        updateHomeUi()
     }
 
     private fun startTutorial() {
@@ -441,7 +469,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
             setPadding(dp(18), dp(16), dp(18), dp(18))
             background = panel()
             visibility = View.GONE
-            setOnClickListener { hideCard() }
+            setOnClickListener { onCardTapped() }
         }
         root.addView(
             card,
@@ -465,7 +493,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
         placeButton = Button(this).apply {
             text = "+ HINTERLASSEN"
             styleAsSignalButton(this)
-            setOnClickListener { askForText() }
+            setOnClickListener { if (homeMode) onHomeAction() else askForText() }
         }
         root.addView(
             placeButton,
@@ -484,6 +512,37 @@ class MainActivity : Activity(), ArRenderer.Scene {
             settingsButton,
             FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM or Gravity.END)
                 .apply { setMargins(0, 0, dp(14), dp(30)) },
+        )
+
+        homeButton = Button(this).apply {
+            text = "\u2302"
+            styleAsSignalButton(this)
+            textSize = 20f
+            contentDescription = "Home-Base"
+            setOnClickListener { toggleHome() }
+            setOnLongClickListener {
+                if (homeMode) manageStation()
+                true
+            }
+        }
+        root.addView(
+            homeButton,
+            FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM or Gravity.START)
+                .apply { setMargins(dp(14), 0, 0, dp(30)) },
+        )
+
+        alignButton = Button(this).apply {
+            text = "\u27f2"
+            styleAsSignalButton(this)
+            textSize = 20f
+            contentDescription = "Neu ausrichten"
+            visibility = View.GONE
+            setOnClickListener { alignStation() }
+        }
+        root.addView(
+            alignButton,
+            FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM or Gravity.START)
+                .apply { setMargins(dp(14), 0, 0, dp(92)) },
         )
 
         // Full-screen notice while a required permission is missing.
@@ -520,8 +579,15 @@ class MainActivity : Activity(), ArRenderer.Scene {
         val age = DateUtils.getRelativeTimeSpanString(
             node.createdAtMs, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS,
         )
-        val origin = if (node.synced) "SERVER" else "NUR AUF DIESEM GERÄT"
-        val full = "SIGNAL // TEXT\n\n${node.payload}\n\n$age · $origin\n[ TIPPEN ZUM SCHLIESSEN ]"
+        val isHome = HomePin.isHomeNodeId(node.id)
+        val origin = when {
+            isHome -> "HOME \u00b7 PRIVAT, NUR AUF DIESEM GER\u00c4T"
+            node.synced -> "SERVER"
+            else -> "NUR AUF DIESEM GER\u00c4T"
+        }
+        val action = if (isHome) "[ TIPPEN: SCHLIESSEN ODER L\u00d6SCHEN ]" else "[ TIPPEN ZUM SCHLIESSEN ]"
+        val full = "SIGNAL // TEXT\n\n${node.payload}\n\n$age \u00b7 $origin\n$action"
+        cardNodeId = node.id
 
         card.visibility = View.VISIBLE
         cardAnimator?.cancel()
@@ -533,7 +599,31 @@ class MainActivity : Activity(), ArRenderer.Scene {
         }
     }
 
+    /** Id of the node whose card is open. */
+    private var cardNodeId: String? = null
+
+    private fun onCardTapped() {
+        val id = cardNodeId
+        if (id == null || !HomePin.isHomeNodeId(id)) {
+            hideCard()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Pin")
+            .setItems(arrayOf("Schlie\u00dfen", "Pin l\u00f6schen")) { _, which ->
+                if (which == 1) {
+                    store.deletePin(HomePin.pinIdOf(id))
+                    reloadHomePins()
+                    SensoryFeedback.emit(SensoryFeedback.Cue.LOCK_LOST)
+                }
+                hideCard()
+            }
+            .setOnDismissListener { enterImmersiveMode() }
+            .show()
+    }
+
     private fun hideCard() {
+        cardNodeId = null
         cardAnimator?.cancel()
         card.visibility = View.GONE
     }
@@ -593,6 +683,229 @@ class MainActivity : Activity(), ArRenderer.Scene {
             .setNegativeButton("Schließen", null)
             .setOnDismissListener { enterImmersiveMode() }
             .show()
+    }
+
+    // ------------------------------------------------------------- home base
+
+    private fun toggleHome() {
+        if (homeMode) leaveHome() else pickStation()
+    }
+
+    /** Station list. Choosing one enters home mode; it still needs aligning. */
+    private fun pickStation() {
+        val stations = store.stations()
+        val labels = stations.map { "${it.name}  \u00b7  Bezug: ${it.reference}" } + "+ Neue Station anlegen"
+        AlertDialog.Builder(this)
+            .setTitle("Home-Base: Wo stehst du?")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which < stations.size) enterStation(stations[which]) else createStation()
+            }
+            .setNegativeButton("Abbrechen", null)
+            .setOnDismissListener { enterImmersiveMode() }
+            .show()
+    }
+
+    private fun createStation() {
+        val name = EditText(this).apply {
+            hint = "Name, z. B. Couch"
+            setSingleLine()
+            filters = arrayOf(InputFilter.LengthFilter(40))
+        }
+        val reference = EditText(this).apply {
+            hint = "Fester Bezugspunkt, z. B. Lichtschalter"
+            setSingleLine()
+            filters = arrayOf(InputFilter.LengthFilter(60))
+        }
+        val info = TextView(this).apply {
+            text = "Stell dich an die Stelle, von der aus du die Pins sehen willst.\n\n" +
+                "Der Bezugspunkt muss sich nie bewegen und von hier gut sichtbar sein: " +
+                "Lichtschalter, T\u00fcrrahmen-Ecke, Steckdose. Auf ihn zielst du bei jedem Betreten."
+            setPadding(0, 0, 0, dp(8))
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(info)
+            addView(name)
+            addView(reference)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Neue Station")
+            .setView(box)
+            .setPositiveButton("Anlegen") { _, _ ->
+                val n = name.text.toString().trim()
+                val r = reference.text.toString().trim()
+                if (n.isEmpty() || r.isEmpty()) {
+                    SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
+                    toast("Name und Bezugspunkt angeben.")
+                    return@setPositiveButton
+                }
+                val st = HomeStation(UUID.randomUUID().toString(), n, r, System.currentTimeMillis())
+                store.insertStation(st)
+                enterStation(st)
+            }
+            .setNegativeButton("Abbrechen", null)
+            .setOnDismissListener { enterImmersiveMode() }
+            .show()
+    }
+
+    private fun enterStation(st: HomeStation) {
+        hideCard()
+        homeTracker.leaveStation()
+        station = st
+        reloadHomePins()
+        homeMode = true
+        tutorialOverlay.visibility = View.GONE
+        updateHomeUi()
+    }
+
+    private fun leaveHome() {
+        homeMode = false
+        station = null
+        homePins = emptyList()
+        homeTracker.leaveStation()
+        hideCard()
+        if (tutorialVisible) {
+            lastTutorialView = null // forces the card to be redrawn
+            tutorialOverlay.visibility = View.VISIBLE
+        }
+        updateHomeUi()
+    }
+
+    private fun manageStation() {
+        val st = station ?: return
+        AlertDialog.Builder(this)
+            .setTitle(st.name)
+            .setItems(arrayOf("Station wechseln", "Station mit allen Pins l\u00f6schen")) { _, which ->
+                when (which) {
+                    0 -> pickStation()
+                    1 -> AlertDialog.Builder(this)
+                        .setTitle("\u201e${st.name}\u201c l\u00f6schen?")
+                        .setMessage("Alle ${homePins.size} Pins dieser Station werden endg\u00fcltig gel\u00f6scht.")
+                        .setPositiveButton("L\u00f6schen") { _, _ ->
+                            store.deleteStation(st.id)
+                            leaveHome()
+                        }
+                        .setNegativeButton("Abbrechen", null)
+                        .setOnDismissListener { enterImmersiveMode() }
+                        .show()
+                }
+            }
+            .setOnDismissListener { enterImmersiveMode() }
+            .show()
+    }
+
+    /** Main action button in home mode: choose station, align, or pin. */
+    private fun onHomeAction() {
+        when {
+            station == null -> pickStation()
+            !homeTracker.isAligned -> alignStation()
+            else -> askForPinText()
+        }
+    }
+
+    /** The player aims at the reference mark right now: fix the station's frame. */
+    private fun alignStation() {
+        if (station == null) return
+        val pose = currentPose() ?: return
+        homeTracker.align(pose[0], pose[1])
+        SensoryFeedback.emit(SensoryFeedback.Cue.LOCK_COMPLETE)
+        updateHomeUi()
+    }
+
+    private fun askForPinText() {
+        val st = station ?: return
+        // Capture the aim NOW: while typing, the phone is lowered and points elsewhere.
+        val pose = currentPose()
+        val angles = pose?.let { homeTracker.aimToPinAngles(it[0]) }
+        if (angles == null) {
+            SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
+            return
+        }
+        val input = EditText(this).apply {
+            hint = "Was soll hier h\u00e4ngen?"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            filters = arrayOf(InputFilter.LengthFilter(cfg.textMaxChars))
+            minLines = 3
+            gravity = Gravity.TOP
+        }
+        val box = FrameLayout(this).apply {
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(input)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Anpinnen")
+            .setMessage("Der Pin h\u00e4ngt dort, wohin das Fadenkreuz eben gezeigt hat.")
+            .setView(box)
+            .setPositiveButton("Anpinnen") { _, _ ->
+                val text = input.text.toString().trim()
+                if (text.isEmpty()) {
+                    SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
+                    return@setPositiveButton
+                }
+                val pin = HomePin(
+                    id = UUID.randomUUID().toString(),
+                    stationId = st.id,
+                    relAzimuthDeg = angles[0],
+                    elevationDeg = angles[1],
+                    distanceM = cfg.homePinDistanceM,
+                    text = text.take(cfg.textMaxChars),
+                    createdAtMs = System.currentTimeMillis(),
+                )
+                store.insertPin(pin)
+                homeTracker.suppressLock(pin)
+                reloadHomePins()
+                SensoryFeedback.emit(SensoryFeedback.Cue.NODE_PLACED)
+            }
+            .setNegativeButton("Abbrechen", null)
+            .setOnDismissListener { enterImmersiveMode() }
+            .show()
+    }
+
+    private fun reloadHomePins() {
+        val st = station
+        homePins = if (st == null) emptyList() else store.pins(st.id)
+        updateHomeUi()
+    }
+
+    /** Buttons and labels for the current home state. Main thread. */
+    private fun updateHomeUi() {
+        val inHome = homeMode
+        val aligned = homeTracker.isAligned
+        alignButton.visibility = if (inHome && station != null && aligned) View.VISIBLE else View.GONE
+        homeButton.text = if (inHome) "\u2715" else "\u2302"
+        homeButton.contentDescription = if (inHome) "Home-Base verlassen" else "Home-Base"
+        placeButton.text = when {
+            !inHome -> if (lastPlaceHighlight) "\u25b6 + HINTERLASSEN \u25c0" else "+ HINTERLASSEN"
+            station == null -> "STATION W\u00c4HLEN"
+            !aligned -> "AUSRICHTEN"
+            else -> "+ ANPINNEN"
+        }
+    }
+
+    /** HUD lines in home mode. GL thread: reads only volatile state. */
+    private fun homeStatusLines(visiblePins: Int): List<String> {
+        val st = station ?: return listOf("HOME", "STATION W\u00c4HLEN")
+        val name = st.name.uppercase()
+        return if (!homeTracker.isAligned) {
+            listOf(
+                "HOME \u00b7 $name",
+                "ZIEL AUF: ${st.reference.uppercase()}",
+                "DANN UNTEN AUSRICHTEN TIPPEN",
+            )
+        } else {
+            listOf(
+                "HOME \u00b7 $name \u00b7 AUSGERICHTET",
+                "PINS $visiblePins \u00b7 VOM STANDPUNKT AUS SCHAUEN",
+                "VERSCHOBEN? \u27f2 UND NEU AUF ${st.reference.uppercase()}",
+            )
+        }
+    }
+
+    /** Copy of the latest [forward, top] pose, or null before the first sensor reading. */
+    private fun currentPose(): Array<FloatArray>? = synchronized(poseLock) {
+        if (!hasPose) null else arrayOf(lastForward.copyOf(), lastTop.copyOf())
     }
 
     // ----------------------------------------------------------- permissions

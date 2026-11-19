@@ -8,6 +8,8 @@ import android.database.sqlite.SQLiteOpenHelper
 import com.lobbyism.app.core.ContentStatus
 import com.lobbyism.app.core.ContentType
 import com.lobbyism.app.core.Geo
+import com.lobbyism.app.core.HomePin
+import com.lobbyism.app.core.HomeStation
 import com.lobbyism.app.core.Node
 
 /**
@@ -20,7 +22,7 @@ import com.lobbyism.app.core.Node
  * All methods are synchronized; they are called from the UI thread and from
  * the sync thread.
  */
-class NodeStore(context: Context) : SQLiteOpenHelper(context, "lobbyism.db", null, 1) {
+class NodeStore(context: Context) : SQLiteOpenHelper(context, "lobbyism.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -38,10 +40,125 @@ class NodeStore(context: Context) : SQLiteOpenHelper(context, "lobbyism.db", nul
             )
             """.trimIndent(),
         )
+        createHomeTables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Version 1 is the first schema. Future versions add migrations here.
+        // Each step migrates one version further, so any old install catches up.
+        if (oldVersion < 2) createHomeTables(db)
+    }
+
+    /** Version 2: home base. Private data: these tables are never synced. */
+    private fun createHomeTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS home_station (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                reference TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS home_pin (
+                id TEXT PRIMARY KEY,
+                station_id TEXT NOT NULL,
+                rel_azimuth_deg REAL NOT NULL,
+                elevation_deg REAL NOT NULL,
+                distance_m REAL NOT NULL,
+                text TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS home_pin_station_idx ON home_pin (station_id)")
+    }
+
+    // ------------------------------------------------------------- home base
+
+    @Synchronized
+    fun stations(): List<HomeStation> {
+        val out = ArrayList<HomeStation>()
+        readableDatabase.query("home_station", null, null, null, null, null, "created_at_ms ASC").use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    HomeStation(
+                        id = c.getString(c.getColumnIndexOrThrow("id")),
+                        name = c.getString(c.getColumnIndexOrThrow("name")),
+                        reference = c.getString(c.getColumnIndexOrThrow("reference")),
+                        createdAtMs = c.getLong(c.getColumnIndexOrThrow("created_at_ms")),
+                    ),
+                )
+            }
+        }
+        return out
+    }
+
+    @Synchronized
+    fun insertStation(st: HomeStation) {
+        val v = ContentValues().apply {
+            put("id", st.id)
+            put("name", st.name)
+            put("reference", st.reference)
+            put("created_at_ms", st.createdAtMs)
+        }
+        writableDatabase.insertWithOnConflict("home_station", null, v, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /** Deletes a station together with all its pins. */
+    @Synchronized
+    fun deleteStation(stationId: String) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("home_pin", "station_id = ?", arrayOf(stationId))
+            db.delete("home_station", "id = ?", arrayOf(stationId))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    @Synchronized
+    fun pins(stationId: String): List<HomePin> {
+        val out = ArrayList<HomePin>()
+        readableDatabase.query("home_pin", null, "station_id = ?", arrayOf(stationId), null, null, "created_at_ms ASC").use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    HomePin(
+                        id = c.getString(c.getColumnIndexOrThrow("id")),
+                        stationId = c.getString(c.getColumnIndexOrThrow("station_id")),
+                        relAzimuthDeg = c.getDouble(c.getColumnIndexOrThrow("rel_azimuth_deg")),
+                        elevationDeg = c.getDouble(c.getColumnIndexOrThrow("elevation_deg")),
+                        distanceM = c.getDouble(c.getColumnIndexOrThrow("distance_m")),
+                        text = c.getString(c.getColumnIndexOrThrow("text")),
+                        createdAtMs = c.getLong(c.getColumnIndexOrThrow("created_at_ms")),
+                    ),
+                )
+            }
+        }
+        return out
+    }
+
+    @Synchronized
+    fun insertPin(p: HomePin) {
+        val v = ContentValues().apply {
+            put("id", p.id)
+            put("station_id", p.stationId)
+            put("rel_azimuth_deg", p.relAzimuthDeg)
+            put("elevation_deg", p.elevationDeg)
+            put("distance_m", p.distanceM)
+            put("text", p.text)
+            put("created_at_ms", p.createdAtMs)
+        }
+        writableDatabase.insertWithOnConflict("home_pin", null, v, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    @Synchronized
+    fun deletePin(pinId: String) {
+        writableDatabase.delete("home_pin", "id = ?", arrayOf(pinId))
     }
 
     @Synchronized

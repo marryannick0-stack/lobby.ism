@@ -44,7 +44,12 @@ class WorldTracker(private val cfg: Config) {
         val lock: Float,
         /** true while the lock is complete and the content is revealed. */
         val revealed: Boolean,
-    )
+        /** Private home-base pin: drawn warm and calm instead of cool and pulsing. */
+        val home: Boolean = false,
+    ) {
+        fun withLock(glitch: Float, lock: Float, revealed: Boolean) =
+            NodeView(node, stage, pos, distanceM, glitch, materialize, lock, revealed, home)
+    }
 
     sealed class Event {
         data class Materialized(val node: Node) : Event()
@@ -66,12 +71,10 @@ class WorldTracker(private val cfg: Config) {
     private class State {
         var pin: FloatArray? = null
         var materialize = 0f
-        var lock = 0f
-        var revealed = false
-        var lastTickStep = 0
     }
 
     private val states = HashMap<String, State>()
+    private val locks = LockEngine(cfg)
 
     /**
      * @param forward camera viewing direction in the sensor frame (unit vector)
@@ -118,15 +121,14 @@ class WorldTracker(private val cfg: Config) {
                 events.add(Event.Materialized(node))
             } else if (st.pin != null && d > radius * cfg.materializeHysteresis) {
                 st.pin = null
-                st.revealed = false
-                st.lock = 0f
+                locks.reset(node.id)
             }
 
             val pin = st.pin
             if (pin != null) {
                 st.materialize = (st.materialize + dtS / MATERIALIZE_TIME_S).coerceAtMost(1f)
-                val glitch = (1f - 0.85f * st.lock).coerceIn(0.1f, 1f)
-                views.add(NodeView(node, Stage.MATERIALIZED, pin, d, glitch, st.materialize, st.lock, st.revealed))
+                // Lock values are filled in by the lock engine below.
+                views.add(NodeView(node, Stage.MATERIALIZED, pin, d, 1f, st.materialize, 0f, false))
             } else {
                 st.materialize = (st.materialize - dtS / MATERIALIZE_TIME_S).coerceAtLeast(0f)
                 if (d <= cfg.pillarMaxDistanceM) {
@@ -143,63 +145,10 @@ class WorldTracker(private val cfg: Config) {
         }
         // Forget nodes that vanished from the list or left the scan radius.
         states.keys.retainAll(seen)
+        locks.retain(seen)
 
-        val focus = updateLock(dtS, forward, views, events)
+        val focus = locks.update(dtS, forward, views, events)
         return Frame(views, focus, hidden, nearest, events)
-    }
-
-    /** Advances the lock on the node closest to the crosshair, decays all others. */
-    private fun updateLock(
-        dtS: Float,
-        forward: FloatArray,
-        views: ArrayList<NodeView>,
-        events: ArrayList<Event>,
-    ): NodeView? {
-        var bestIndex = -1
-        var bestErr = Double.MAX_VALUE
-        for (i in views.indices) {
-            val v = views[i]
-            if (v.stage != Stage.MATERIALIZED || v.materialize < 0.8f) continue
-            val err = angleBetweenDeg(forward, v.pos)
-            if (err < bestErr) {
-                bestErr = err
-                bestIndex = i
-            }
-        }
-
-        for (i in views.indices) {
-            val v = views[i]
-            if (v.stage != Stage.MATERIALIZED) continue
-            val st = states[v.node.id] ?: continue
-            val onTarget = i == bestIndex && bestErr <= cfg.lockAngleDeg
-            val before = st.lock
-
-            if (onTarget) {
-                st.lock = (st.lock + dtS / cfg.lockTimeS.toFloat()).coerceAtMost(1f)
-                // Haptic "ratchet": one tick per quarter of the way.
-                val step = (st.lock * 4).toInt()
-                if (step > st.lastTickStep && st.lock < 1f) events.add(Event.LockTick(v.node, st.lock))
-                st.lastTickStep = step
-                if (before < 1f && st.lock >= 1f) {
-                    st.revealed = true
-                    events.add(Event.Locked(v.node))
-                }
-            } else {
-                st.lock = (st.lock - dtS / cfg.lockDecayS.toFloat()).coerceAtLeast(0f)
-                st.lastTickStep = (st.lock * 4).toInt()
-                if (st.revealed && st.lock <= 0f) {
-                    st.revealed = false
-                    events.add(Event.LockLost(v.node))
-                }
-            }
-            // Replace the view so renderer and HUD see this frame's lock value.
-            views[i] = NodeView(
-                v.node, v.stage, v.pos, v.distanceM,
-                (1f - 0.85f * st.lock).coerceIn(0.1f, 1f),
-                v.materialize, st.lock, st.revealed,
-            )
-        }
-        return if (bestIndex >= 0 && bestErr <= cfg.lockAngleDeg * FOCUS_CONE_FACTOR) views[bestIndex] else null
     }
 
     /**
@@ -228,9 +177,6 @@ class WorldTracker(private val cfg: Config) {
     companion object {
         private const val MATERIALIZE_TIME_S = 1.2f
         private const val PILLAR_RENDER_DISTANCE_M = 60.0
-
-        /** The HUD shows the focus bracket a bit before the lock actually charges. */
-        private const val FOCUS_CONE_FACTOR = 2.5
 
         /** Azimuth of a vector in the sensor frame, degrees clockwise from the frame's y axis. */
         fun sensorAzimuthDeg(v: FloatArray): Double =

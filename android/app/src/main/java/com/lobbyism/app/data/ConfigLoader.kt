@@ -48,6 +48,8 @@ object ConfigLoader {
             layerScale = j.optDouble("layerScale", d.layerScale),
             nodePointCount = j.optInt("nodePointCount", d.nodePointCount),
             nodeSizeM = j.optDouble("nodeSizeM", d.nodeSizeM),
+            homePinDistanceM = j.optDouble("homePinDistanceM", d.homePinDistanceM),
+            homeNodeSizeM = j.optDouble("homeNodeSizeM", d.homeNodeSizeM),
             tutorial = loadTutorial(j.optJSONObject("tutorial"), d.tutorial),
         )
     }

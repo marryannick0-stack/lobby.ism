@@ -33,6 +33,9 @@
   "nodePointCount": 900,
   "nodeSizeM": 0.45,
 
+  "homePinDistanceM": 2.0,
+  "homeNodeSizeM": 0.28,
+
   "tutorial": {
     "gpsGoodAccuracyM": 15.0,
     "minWalkSpeedMps": 0.9,

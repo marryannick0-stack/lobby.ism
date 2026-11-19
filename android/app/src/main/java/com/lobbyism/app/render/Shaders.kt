@@ -50,6 +50,7 @@ uniform float uGlitch;
 uniform float uMaterialize;
 uniform float uPointSize;
 uniform float uLock;
+uniform float uPulseAmount;
 varying float vAlpha;
 
 float hash(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
@@ -80,7 +81,8 @@ void main() {
     // Nodes pulse from the INSIDE outwards (art constraint 9): a brightness
     // wave travels from the centre to the rim. A complete lock steadies it.
     float wave = 0.5 + 0.5 * sin(uTime * 3.2 - length(aPos) * 9.0);
-    vAlpha = mix(0.35 + 0.65 * wave, 1.0, uLock) * (0.25 + 0.75 * uMaterialize + 0.2 * scatter);
+    float pulse = mix(1.0, 0.35 + 0.65 * wave, uPulseAmount);
+    vAlpha = mix(pulse, 1.0, uLock) * (0.25 + 0.75 * uMaterialize + 0.2 * scatter);
 }
 """
 

@@ -41,6 +41,8 @@ class HudView(context: Context) : View(context) {
         val sensorOk: Boolean,
         /** Tutorial guidance: signed degrees to turn towards the tutorial node, or null. */
         val turnDeg: Double? = null,
+        /** Home base status lines; when set they replace the outdoor status. */
+        val homeLines: List<String>? = null,
     )
 
     @Volatile var state: State? = null
@@ -101,6 +103,12 @@ class HudView(context: Context) : View(context) {
             canvas.drawText(str, left + 1.2f * density, y, ghost) // faint colour ghost, like a misaligned tube
             canvas.drawText(str, left, y, text)
             y += lineHeight
+        }
+
+        val home = s.homeLines
+        if (home != null) {
+            for (l in home) row(l)
+            return
         }
 
         when {
