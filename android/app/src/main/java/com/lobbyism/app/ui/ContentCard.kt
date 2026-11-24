@@ -5,7 +5,7 @@ import android.content.Context
 import android.text.format.DateUtils
 import android.view.View
 import android.widget.TextView
-import com.lobbyism.app.core.HomePin
+import com.lobbyism.app.core.HomeObject
 import com.lobbyism.app.core.Node
 import com.lobbyism.app.ui.theme.Theme
 
@@ -15,8 +15,10 @@ import com.lobbyism.app.ui.theme.Theme
  */
 class ContentCard(
     context: Context,
-    /** Tapped while a home pin is shown: the caller offers to delete it. */
-    private val onHomePinTapped: (pinId: String) -> Unit,
+    /** Tapped while a home object is shown: the caller offers to move or remove it. */
+    private val onHomeObjectTapped: (objectId: String) -> Unit,
+    /** Card text for a home object that is not a plain note (armour stands), or null. */
+    private val describeHomeObject: (objectId: String) -> String?,
 ) : TextView(context) {
 
     private var animator: ValueAnimator? = null
@@ -35,20 +37,25 @@ class ContentCard(
         visibility = View.GONE
         setOnClickListener {
             val id = nodeId
-            if (id != null && HomePin.isHomeNodeId(id)) onHomePinTapped(HomePin.pinIdOf(id)) else close()
+            if (id != null && HomeObject.isHomeNodeId(id)) onHomeObjectTapped(HomeObject.objectIdOf(id)) else close()
         }
     }
 
     fun show(node: Node) {
         val age = DateUtils.getRelativeTimeSpanString(node.createdAtMs, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
-        val isHome = HomePin.isHomeNodeId(node.id)
+        val isHome = HomeObject.isHomeNodeId(node.id)
         val origin = when {
             isHome -> "HOME · PRIVAT, NUR AUF DIESEM GERÄT"
             node.synced -> "SERVER"
             else -> "NUR AUF DIESEM GERÄT"
         }
-        val action = if (isHome) "[ TIPPEN: SCHLIESSEN ODER LÖSCHEN ]" else "[ TIPPEN ZUM SCHLIESSEN ]"
-        val full = "SIGNAL // TEXT\n\n${node.payload}\n\n$age · $origin\n$action"
+        val action = if (isHome) "[ TIPPEN: VERSCHIEBEN ODER ENTFERNEN ]" else "[ TIPPEN ZUM SCHLIESSEN ]"
+        val special = if (isHome) describeHomeObject(HomeObject.objectIdOf(node.id)) else null
+        val full = if (special != null) {
+            "SIGNAL // GEAR\n\n$special\n\n$origin\n$action"
+        } else {
+            "SIGNAL // TEXT\n\n${node.payload}\n\n$age · $origin\n$action"
+        }
         nodeId = node.id
 
         visibility = View.VISIBLE

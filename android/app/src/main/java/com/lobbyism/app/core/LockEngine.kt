@@ -52,7 +52,7 @@ class LockEngine(private val cfg: Config) {
         var bestErr = Double.MAX_VALUE
         for (i in views.indices) {
             val v = views[i]
-            if (v.stage != WorldTracker.Stage.MATERIALIZED || v.materialize < 0.8f) continue
+            if (v.stage != WorldTracker.Stage.MATERIALIZED || v.materialize < 0.8f || !v.lockable) continue
             val err = WorldTracker.angleBetweenDeg(forward, v.pos)
             if (err < bestErr) {
                 bestErr = err
@@ -62,7 +62,7 @@ class LockEngine(private val cfg: Config) {
 
         for (i in views.indices) {
             val v = views[i]
-            if (v.stage != WorldTracker.Stage.MATERIALIZED) continue
+            if (v.stage != WorldTracker.Stage.MATERIALIZED || !v.lockable) continue
             val st = states.getOrPut(v.node.id) { State() }
             val aimed = i == bestIndex && bestErr <= cfg.lockAngleDeg
             // Lift the suppression only once the object is fully there and the crosshair is off it;
@@ -90,7 +90,7 @@ class LockEngine(private val cfg: Config) {
                 }
             }
             // Replace the view so renderer and HUD see this frame's lock value.
-            views[i] = v.withLock(glitchFor(st.lock), st.lock, st.revealed)
+            views[i] = v.withLock(glitchFor(st.lock, v.baseGlitch), st.lock, st.revealed)
         }
         return if (bestIndex >= 0 && bestErr <= cfg.lockAngleDeg * FOCUS_CONE_FACTOR) views[bestIndex] else null
     }
@@ -99,7 +99,7 @@ class LockEngine(private val cfg: Config) {
         /** The HUD shows the focus bracket a bit before the lock actually charges. */
         private const val FOCUS_CONE_FACTOR = 2.5
 
-        /** A lock steadies the object: full lock leaves only a trace of glitch. */
-        fun glitchFor(lock: Float): Float = (1f - 0.85f * lock).coerceIn(0.1f, 1f)
+        /** A lock steadies the object: a full lock removes 85 % of its resting glitch. */
+        fun glitchFor(lock: Float, base: Float = 1f): Float = (base * (1f - 0.85f * lock)).coerceIn(0.05f, 1f)
     }
 }

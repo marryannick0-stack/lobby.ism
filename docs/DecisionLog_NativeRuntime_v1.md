@@ -1,6 +1,6 @@
 # LOBBYISM — Decision Log: Native Runtime (Unity-Ablösung)
 
-**Version:** 1.1
+**Version:** 1.2
 **Datum:** 24. November 2026 (Erstfassung 16. November 2026)
 **Status:** Entschieden für Phase 0a. Offene Punkte am Ende.
 **Autorität:** Überschreibt den Abschnitt „Tech Stack" und die Client-Struktur in `CLAUDE.md` sowie Engine-Angaben in GDD v2–v4. Gameplay-Regeln (R1–R6), Node-Datenmodell und Phasenplan bleiben unverändert gültig.
@@ -117,6 +117,29 @@
 
 ---
 
+## ENTSCHIEDEN — N8: Home-Base als begehbarer Stash
+
+**Problem:** Die Home-Base konnte nur Textnotizen. Gewünscht ist eine Basis im Inneren, in der Rüstungen und weitere Objekte stehen. Loot gibt es noch nicht.
+
+**Entscheidung:**
+
+- Home-Objekte haben einen Typ: NOTIZ (hängt in Zielrichtung) oder GEAR (Rüstungsständer, steht auf dem Boden). Weitere Typen (Bild, Ton) docken am selben System an.
+- Rüstungsständer werden durch Zielen auf den Boden platziert: Abstand aus Haltehöhe und Neigung (virtueller Boden). Sie drehen sich zum Spieler.
+- Einheitliches Platzieren: Objekt wählen, es hängt am Fadenkreuz („Tragen“), „HIER ABSTELLEN“ setzt es. Verschieben nutzt denselben Weg.
+- Stash mit 20 Plätzen nach Loot System v2.0, Datenmodell wie `gear_item` inklusive Memoria.
+- **Testbestand:** Gear-Teile werden vorerst lokal als PROTOTYP erzeugt (alle 8 Teile, Tier frei wählbar) und überall als solche markiert.
+- Gear-Formen folgen den Art Constraints: feste Körperzonen, Unterscheidung über Form statt Farbe, Tiers über Stabilität (Glitch), nur T4 mit Aura.
+
+**Regelbruch, bewusst und befristet:**
+
+| Regel | Bruch | Wirkung | Passt zur Absicht |
+|---|---|---|---|
+| R4 Server-Autorität: Gear entsteht nur auf dem Server | Prototyp-Gear entsteht lokal | Home-Base ist testbar, bevor Loot existiert | ja, solange es klar als PROTOTYP markiert bleibt und echtes Loot es ersetzt |
+
+**Konsequenz:** Wenn Loot kommt, liefert der Server `gear_item`-Einträge; Home-Base, Ständer und Karte bleiben unverändert. Prototyp-Teile werden dann entfernt.
+
+---
+
 ## Zusammenfassung
 
 | # | Entscheidung | Status |
@@ -129,6 +152,7 @@
 | N5 | Offline-first, Nakama über REST | ✅ Client umgesetzt; Server nur gegen Attrappe getestet |
 | N6 | SensoryFeedback + Glitch | ✅ umgesetzt |
 | N7 | Schichtenarchitektur, Feld-Karte, CLAUDE.md, CI-Prüfungen | ✅ umgesetzt |
+| N8 | Home-Base: Objekttypen, Rüstungsständer, Stash, Tragen/Abstellen | ✅ umgesetzt, ungetestet am Gerät |
 
 ## Offene Punkte
 
@@ -143,4 +167,5 @@
 ---
 
 *v1.0 — 16.11.2026 — Erstfassung nach Umstellung auf native Runtime.*
+*v1.2 — 24.11.2026 — N8 ergänzt: Home-Base als begehbarer Stash mit Prototyp-Gear.*
 *v1.1 — 24.11.2026 — N7 ergänzt: Schichtenarchitektur und Arbeitsweise pro Feld. Home-Base (Stationen) und Tutorial sind seit Build 2/3 umgesetzt.*

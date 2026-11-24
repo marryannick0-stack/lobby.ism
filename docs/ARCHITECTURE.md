@@ -32,7 +32,8 @@ Rules behind this: see `CLAUDE.md` → Architecture rules.
 | Gyro lock | `core/LockEngine.kt` | `ui/HudView.kt` reticle | `feedback/*` cues `LOCK_*` | `lockAngleDeg`, `lockTimeS`, `lockDecayS` |
 | North without compass | `core/HeadingEstimator.kt` | `ui/GameLoop.onGpsFix` | HUD "NORD SYNC" | `heading*` |
 | Leave a message | `data/NodeRepository.placeText` | `ui/MainActivity.askForText` | `ui/ContentCard.kt` | `textMaxChars`, `placeMaxAccuracyM` |
-| Home base | `core/HomeBase.kt` | `ui/home/HomeController.kt`, `ui/ActionButtons.kt` | warm colour + calm pulse in `ArRenderer` | `homePinDistanceM`, `homeNodeSizeM` |
+| Home base: stations, notes, carrying, floor placement | `core/HomeBase.kt` | `ui/home/HomeController.kt`, `ui/ActionButtons.kt` | warm colour + calm pulse in `ArRenderer` | `homePinDistanceM`, `homeNodeSizeM`, `homeGear*DistanceM` |
+| Gear and stash (prototype stock) | `core/Gear.kt`, `data/HomeRepository.kt` | `ui/home/HomeController.kt` (stash dialogs), `ui/ContentCard.kt` | `render/GearGeometry.kt`, `ArRenderer.drawStand` | `gearStandHeightM`, `gearTierGlitch`, `stashSlots` |
 | Tutorial / calibration walk | `core/Tutorial.kt` | `ui/tutorial/*` | `ui/tutorial/TutorialOverlay.kt` | `tutorial.*` |
 | Glitch look | — | — | `render/Shaders.kt` COMPOSITE, `ArRenderer.onCue` | `layerScale` |
 | Haptics and sound | — | — | `feedback/Haptics.kt`, `feedback/SignalAudio.kt` | — |
@@ -50,7 +51,8 @@ Everything rendered lives in the sensor frame of `GAME_ROTATION_VECTOR`: origin 
 | Data | Where | Synced |
 |---|---|---|
 | Public nodes | SQLite `nodes` | yes, via `NodeRepository` → `SyncEngine` |
-| Home stations and pins | SQLite `home_station`, `home_pin` | never |
+| Home stations and objects (notes, armour stands) | SQLite `home_station`, `home_pin` (column `kind`) | never |
+| Stash (gear items, prototype stock) | SQLite `gear_item` (mirrors the loot system's server model) | never; real gear will be server-authoritative (R4) |
 | Settings, device id, tutorial state | SharedPreferences `lobbyism` | never |
 
 Schema changes: bump the version in `NodeStore`, add a step in `onUpgrade`, never edit an old step.

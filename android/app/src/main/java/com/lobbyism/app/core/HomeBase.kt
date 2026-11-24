@@ -4,24 +4,30 @@ import kotlin.math.asin
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 
 /**
- * Home base: private pins inside your own four walls.
+ * Home base: private objects inside your own four walls.
  *
  * Indoors there is no GPS and, without camera tracking (stage 2), the phone
  * does not know where in the room it stands. It knows very precisely where it
  * POINTS, though. So the home base works with stations: fixed standing spots
- * ("couch", "desk"). From a station, pins hang in any direction around you.
+ * ("couch", "desk"). From a station, objects sit in any direction around you.
  *
  * The gyro's zero direction is arbitrary and resets with every app start, so
  * each station has a reference mark (e.g. the light switch). Aiming at it and
- * tapping "align" restores the frame; every pin is stored relative to it.
+ * tapping "align" restores the frame; every object is stored relative to it.
  *
- * Limit: pins look right from the station's spot only. Walking through the
+ * Two kinds of objects:
+ *  - NOTE: hangs where the crosshair pointed, at a fixed distance (on a wall, the ceiling).
+ *  - GEAR: an armour stand that stands ON THE FLOOR. Aim at the floor spot; the
+ *    distance follows from the phone's height and the downward angle (virtual ground).
+ *
+ * Limit: objects look right from the station's spot only. Walking through the
  * room moves them along with you. Free movement needs stage 2 or markers.
  *
- * Privacy (GDD: home is personal, never shown to others): stations and pins
- * stay on this phone and are never synced.
+ * Privacy (GDD: home is personal, never shown to others): everything here
+ * stays on this phone and is never synced.
  */
 data class HomeStation(
     val id: String,
@@ -31,18 +37,30 @@ data class HomeStation(
     val createdAtMs: Long,
 )
 
-data class HomePin(
-    val id: String,
-    val stationId: String,
+enum class HomeObjectKind { NOTE, GEAR }
+
+/** Where an object sits, relative to its station's reference mark. */
+data class Placement(
     /** Horizontal angle clockwise from the reference mark, degrees (-180..180]. */
     val relAzimuthDeg: Double,
-    /** Angle above (+) or below (-) the horizon, degrees. */
+    /** NOTE: angle above (+) or below (-) the horizon. GEAR: unused (0). */
     val elevationDeg: Double,
+    /** NOTE: straight-line distance. GEAR: horizontal distance to the stand on the floor. */
     val distanceM: Double,
+)
+
+data class HomeObject(
+    val id: String,
+    val stationId: String,
+    val kind: HomeObjectKind,
+    val placement: Placement,
+    /** NOTE: the text. GEAR: empty. */
     val text: String,
+    /** GEAR: the stash item shown on the stand. */
+    val gear: GearItem?,
     val createdAtMs: Long,
 ) {
-    /** Node wrapper so pins share rendering, lock and content card with outdoor nodes. */
+    /** Node wrapper so objects share lock and content card with outdoor nodes. */
     fun asNode(): Node = Node(
         id = ID_PREFIX + id,
         lat = 0.0,
@@ -58,12 +76,18 @@ data class HomePin(
     companion object {
         const val ID_PREFIX = "home:"
 
+        /** Id used for the object currently being carried (not yet stored). */
+        const val CARRY_ID = "carry"
+
         fun isHomeNodeId(nodeId: String) = nodeId.startsWith(ID_PREFIX)
-        fun pinIdOf(nodeId: String) = nodeId.removePrefix(ID_PREFIX)
+        fun objectIdOf(nodeId: String) = nodeId.removePrefix(ID_PREFIX)
     }
 }
 
-/** Places the pins of one station in the sensor frame and runs the lock on them. */
+/**
+ * Places the objects of one station in the sensor frame, runs the lock on
+ * them and handles the carried object that follows the crosshair.
+ */
 class HomeTracker(private val cfg: Config) {
 
     private val locks = LockEngine(cfg)
@@ -71,7 +95,7 @@ class HomeTracker(private val cfg: Config) {
 
     /**
      * Sensor azimuth of the reference mark, measured at the last "align".
-     * null = not aligned since the station was entered: pins cannot be placed or shown.
+     * null = not aligned since the station was entered: nothing can be placed or shown.
      */
     @Volatile var referenceAzimuthDeg: Double? = null
 
@@ -89,41 +113,57 @@ class HomeTracker(private val cfg: Config) {
     }
 
     /**
-     * Converts the current crosshair direction into a pin position relative to the
-     * reference mark. Returns null while the station is not aligned.
-     * @return [relAzimuthDeg, elevationDeg]
+     * Where an object of [kind] would go if placed along the crosshair now.
+     * Returns null while the station is not aligned.
      */
-    fun aimToPinAngles(forward: FloatArray): DoubleArray? {
+    fun placementFromAim(kind: HomeObjectKind, forward: FloatArray): Placement? {
         val ref = referenceAzimuthDeg ?: return null
         val len = sqrt(forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2])
         if (len < 1e-6f) return null
         val elevation = Math.toDegrees(asin((forward[2] / len).toDouble().coerceIn(-1.0, 1.0)))
         // Straight up or down the horizontal direction is undefined; the angle then hardly matters.
-        val azimuth = WorldTracker.sensorAzimuthDeg(forward)
-        return doubleArrayOf(Geo.wrap180(azimuth - ref), elevation)
+        val relAz = Geo.wrap180(WorldTracker.sensorAzimuthDeg(forward) - ref)
+        return when (kind) {
+            HomeObjectKind.NOTE -> Placement(relAz, elevation, cfg.homePinDistanceM)
+            HomeObjectKind.GEAR -> Placement(relAz, 0.0, floorDistance(elevation))
+        }
     }
 
-    /** Lets a freshly placed pin appear without locking itself at once. */
-    fun suppressLock(pin: HomePin) = locks.suppressUntilLeft(pin.asNode().id)
+    /**
+     * Distance to the floor point the crosshair hits (virtual ground: the floor
+     * lies [Config.cameraHeightM] below the phone). Looking level or up has no
+     * floor hit; the stand then goes to the default distance.
+     */
+    fun floorDistance(elevationDeg: Double): Double {
+        val depression = -elevationDeg
+        if (depression < MIN_FLOOR_DEPRESSION_DEG) return cfg.homeGearDefaultDistanceM
+        val d = cfg.cameraHeightM / tan(Math.toRadians(depression))
+        return d.coerceIn(cfg.homeGearMinDistanceM, cfg.homeGearMaxDistanceM)
+    }
 
-    fun update(dtS: Float, forward: FloatArray, pins: List<HomePin>): WorldTracker.Frame {
-        val ref = referenceAzimuthDeg
-        if (ref == null) return WorldTracker.Frame(emptyList(), null, 0, null, emptyList())
+    /** Lets a freshly placed object appear without locking itself at once. */
+    fun suppressLock(obj: HomeObject) = locks.suppressUntilLeft(obj.asNode().id)
 
-        val views = ArrayList<WorldTracker.NodeView>(pins.size)
+    /**
+     * @param carried the object following the crosshair (being placed or moved), or null.
+     *   It is drawn at the aimed spot, never locks, and replaces a stored object with the same id.
+     */
+    fun update(dtS: Float, forward: FloatArray, objects: List<HomeObject>, carried: HomeObject?): WorldTracker.Frame {
+        val ref = referenceAzimuthDeg ?: return WorldTracker.Frame(emptyList(), null, 0, null, emptyList())
+
+        val views = ArrayList<WorldTracker.NodeView>(objects.size + 1)
         val events = ArrayList<WorldTracker.Event>()
         val seen = HashSet<String>()
-        for (p in pins) {
-            val node = p.asNode()
+        for (o in objects) {
+            if (carried != null && o.id == carried.id) continue // shown at the crosshair instead
+            val node = o.asNode()
             seen.add(node.id)
             val m = ((materialize[node.id] ?: 0f) + dtS / MATERIALIZE_TIME_S).coerceAtMost(1f)
             materialize[node.id] = m
-            views.add(
-                WorldTracker.NodeView(
-                    node, WorldTracker.Stage.MATERIALIZED, position(ref, p), p.distanceM,
-                    1f, m, 0f, false, home = true,
-                ),
-            )
+            views.add(view(ref, o, o.placement, m, lockable = true))
+        }
+        if (carried != null) {
+            placementFromAim(carried.kind, forward)?.let { views.add(view(ref, carried, it, 1f, lockable = false)) }
         }
         materialize.keys.retainAll(seen)
         locks.retain(seen)
@@ -131,10 +171,45 @@ class HomeTracker(private val cfg: Config) {
         return WorldTracker.Frame(views, focus, 0, null, events)
     }
 
-    private fun position(refAzimuthDeg: Double, p: HomePin): FloatArray {
-        val az = Math.toRadians(refAzimuthDeg + p.relAzimuthDeg)
-        val el = Math.toRadians(p.elevationDeg)
-        val r = p.distanceM
+    private fun view(ref: Double, o: HomeObject, p: Placement, materialized: Float, lockable: Boolean): WorldTracker.NodeView {
+        val az = ref + p.relAzimuthDeg
+        val pos: FloatArray
+        val yaw: Float
+        val baseGlitch: Float
+        when (o.kind) {
+            HomeObjectKind.NOTE -> {
+                pos = spherical(az, p.elevationDeg, p.distanceM)
+                yaw = 0f
+                baseGlitch = 1f
+            }
+            HomeObjectKind.GEAR -> {
+                // Centre of the stand: standing on the virtual floor, half its height up.
+                val a = Math.toRadians(az)
+                val centreZ = -cfg.cameraHeightM + cfg.gearStandHeightM / 2.0
+                pos = floatArrayOf(
+                    (sin(a) * p.distanceM).toFloat(),
+                    (cos(a) * p.distanceM).toFloat(),
+                    centreZ.toFloat(),
+                )
+                // The stand turns its front towards the station (the player).
+                yaw = Geo.wrap360(az + 180.0).toFloat()
+                baseGlitch = o.gear?.let { tierGlitch(it.tier) } ?: 1f
+            }
+        }
+        return WorldTracker.NodeView(
+            o.asNode(), WorldTracker.Stage.MATERIALIZED, pos, p.distanceM,
+            baseGlitch, materialized, 0f, false,
+            home = true, gear = o.gear, yawDeg = yaw, lockable = lockable, baseGlitch = baseGlitch,
+        )
+    }
+
+    /** Glitch of a resting stand by tier (Art Constraints 3: T1 noise ... T4 presence). */
+    fun tierGlitch(tier: GearTier): Float =
+        cfg.gearTierGlitch.getOrElse(tier.ordinal) { 1.0 }.toFloat().coerceIn(0.05f, 1f)
+
+    private fun spherical(azDeg: Double, elDeg: Double, r: Double): FloatArray {
+        val az = Math.toRadians(azDeg)
+        val el = Math.toRadians(elDeg)
         return floatArrayOf(
             (sin(az) * cos(el) * r).toFloat(),
             (cos(az) * cos(el) * r).toFloat(),
@@ -144,5 +219,7 @@ class HomeTracker(private val cfg: Config) {
 
     private companion object {
         const val MATERIALIZE_TIME_S = 0.8f
+        /** Below this downward angle the crosshair does not hit the floor in a sensible distance. */
+        const val MIN_FLOOR_DEPRESSION_DEG = 12.0
     }
 }

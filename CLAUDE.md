@@ -68,6 +68,8 @@ Feature → files map: @docs/ARCHITECTURE.md
 
 ## Known limits (do not "fix" without a decision)
 
-- Tracking is 3DoF + GPS. Home pins are correct only from their station's spot. 6DoF = stage 2 (OpenVINS), not started.
+- Tracking is 3DoF + GPS. Home objects are correct only from their station's spot. 6DoF = stage 2 (OpenVINS), not started.
+- Gear is local PROTOTYPE stock (labelled). Real gear must come from the server (R4) once loot exists; `gear_item` already mirrors that model.
+- Armour stands stand on a virtual floor `cameraHeightM` below the phone. Sitting or a different holding height shifts them.
 - Gyro yaw resets on every app start; north is relearned by walking, home stations by aligning.
 - Licence not chosen yet (decision log NativeRuntime, O1). Do not add licence headers.

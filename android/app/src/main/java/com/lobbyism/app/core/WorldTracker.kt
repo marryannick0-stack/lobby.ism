@@ -44,11 +44,19 @@ class WorldTracker(private val cfg: Config) {
         val lock: Float,
         /** true while the lock is complete and the content is revealed. */
         val revealed: Boolean,
-        /** Private home-base pin: drawn warm and calm instead of cool and pulsing. */
+        /** Private home-base object: drawn warm and calm instead of cool and pulsing. */
         val home: Boolean = false,
+        /** Set for an armour stand: which gear piece it shows. */
+        val gear: GearItem? = null,
+        /** Heading the object's front faces, degrees clockwise in the sensor frame (stands face the player). */
+        val yawDeg: Float = 0f,
+        /** false for an object that cannot be locked (e.g. the one being carried). */
+        val lockable: Boolean = true,
+        /** Glitch with no lock at all; a full lock steadies it from here (gear tiers start lower). */
+        val baseGlitch: Float = 1f,
     ) {
         fun withLock(glitch: Float, lock: Float, revealed: Boolean) =
-            NodeView(node, stage, pos, distanceM, glitch, materialize, lock, revealed, home)
+            NodeView(node, stage, pos, distanceM, glitch, materialize, lock, revealed, home, gear, yawDeg, lockable, baseGlitch)
     }
 
     sealed class Event {

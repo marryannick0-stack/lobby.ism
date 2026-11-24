@@ -64,6 +64,15 @@ data class Config(
     /** Distance at which a home pin hangs in front of the station. Only affects its size on screen. */
     val homePinDistanceM: Double = 2.0,
     val homeNodeSizeM: Double = 0.28,
+    /** Armour stands: height of the figure, and floor distance limits when aiming at the floor. */
+    val gearStandHeightM: Double = 1.75,
+    val homeGearDefaultDistanceM: Double = 2.5,
+    val homeGearMinDistanceM: Double = 0.8,
+    val homeGearMaxDistanceM: Double = 5.0,
+    /** Resting glitch per gear tier T1..T4 (Art Constraints 3: stability, not colour). */
+    val gearTierGlitch: List<Double> = listOf(0.85, 0.55, 0.22, 0.10),
+    /** Stash capacity (Loot System v2.0: 20 at start). */
+    val stashSlots: Int = 20,
 
     // --- Tutorial ---
     val tutorial: TutorialConfig = TutorialConfig(),

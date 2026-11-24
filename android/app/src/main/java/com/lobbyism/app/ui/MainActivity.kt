@@ -97,7 +97,7 @@ class MainActivity : Activity() {
         // --- UI state holders ---
         dialogs = Dialogs(this) { enterImmersiveMode() }
         permissions = PermissionGate(this, settings, dialogs) { if (resumed) startPermissionGated() }
-        home = HomeController(cfg, HomeRepository(store), pose, dialogs) { onHomeChanged() }
+        home = HomeController(cfg, HomeRepository(cfg, store), pose, dialogs) { onHomeChanged() }
         tutorial = TutorialController(this, cfg.tutorial, settings, onRotateCamera = { rotateCamera() }) { renderButtons() }
 
         // --- engine ---
@@ -175,7 +175,11 @@ class MainActivity : Activity() {
         root.addView(glView, Theme.matchParent())
         root.addView(hud, Theme.matchParent())
 
-        card = ContentCard(this) { pinId -> home.onPinTapped(pinId) { card.close() } }
+        card = ContentCard(
+            this,
+            onHomeObjectTapped = { id -> home.onObjectTapped(id) { card.close() } },
+            describeHomeObject = home::describe,
+        )
         root.addView(
             card,
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM)
@@ -194,7 +198,7 @@ class MainActivity : Activity() {
             onMain = { if (home.isActive) home.onMainAction() else askForText() },
             onHome = { home.toggle() },
             onHomeLong = { if (home.isActive) home.manage() },
-            onAlign = { home.align() },
+            onSecondary = { home.onSecondaryAction() },
             onSettings = {
                 SettingsDialog(this, settings, nodes, dialogs, ::rotateCamera) {
                     card.close()

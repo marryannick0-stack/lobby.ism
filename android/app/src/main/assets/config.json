@@ -35,6 +35,12 @@
 
   "homePinDistanceM": 2.0,
   "homeNodeSizeM": 0.28,
+  "gearStandHeightM": 1.75,
+  "homeGearDefaultDistanceM": 2.5,
+  "homeGearMinDistanceM": 0.8,
+  "homeGearMaxDistanceM": 5.0,
+  "gearTierGlitch": [0.85, 0.55, 0.22, 0.10],
+  "stashSlots": 20,
 
   "tutorial": {
     "gpsGoodAccuracyM": 15.0,

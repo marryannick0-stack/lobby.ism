@@ -267,49 +267,118 @@ class HomeTrackerTest {
         return floatArrayOf((Math.sin(a) * Math.cos(e)).toFloat(), (Math.cos(a) * Math.cos(e)).toFloat(), Math.sin(e).toFloat())
     }
     private val up = floatArrayOf(0f, 0f, 1f)
+    private fun note(id: String, p: Placement) = HomeObject(id, "s", HomeObjectKind.NOTE, p, "x", null, 0)
+    private val gear = GearItem("g", GearType.REACTIVE_ARMOR, GearTier.LOCKED, "Prototyp", true, 0)
+    private fun stand(id: String, p: Placement) = HomeObject(id, "s", HomeObjectKind.GEAR, p, "", gear, 0)
 
     @Test fun nothingUntilAligned() {
         val h = HomeTracker(cfg)
-        assertNull(h.aimToPinAngles(dir(10.0)))
-        val pin = HomePin("p", "s", 0.0, 0.0, 2.0, "x", 0)
-        assertTrue(h.update(0.1f, dir(0.0), listOf(pin)).views.isEmpty())
+        assertNull(h.placementFromAim(HomeObjectKind.NOTE, dir(10.0)))
+        assertTrue(h.update(0.1f, dir(0.0), listOf(note("p", Placement(0.0, 0.0, 2.0))), null).views.isEmpty())
     }
 
-    @Test fun pinReturnsToTheSameRealDirectionAfterTheGyroFrameRotated() {
-        // Session 1: reference mark lies at sensor azimuth 30. Pin aimed at sensor azimuth 120, 20 deg up.
+    @Test fun noteReturnsToTheSameRealDirectionAfterTheGyroFrameRotated() {
+        // Session 1: reference mark at sensor azimuth 30. Note aimed at sensor azimuth 120, 20 deg up.
         val h1 = HomeTracker(cfg)
         h1.align(dir(30.0), up)
-        val angles = h1.aimToPinAngles(dir(120.0, 20.0))!!
-        assertEquals(90.0, angles[0], 1e-3)
-        assertEquals(20.0, angles[1], 1e-3)
-        val pin = HomePin("p", "s", angles[0], angles[1], 2.0, "x", 0)
+        val p = h1.placementFromAim(HomeObjectKind.NOTE, dir(120.0, 20.0))!!
+        assertEquals(90.0, p.relAzimuthDeg, 1e-3)
+        assertEquals(20.0, p.elevationDeg, 1e-3)
 
-        // Session 2: the gyro frame is rotated by -100 deg, the same mark now lies at sensor azimuth -70.
+        // Session 2: gyro frame rotated by -100 deg, the same mark now at sensor azimuth -70.
         val h2 = HomeTracker(cfg)
         h2.align(dir(-70.0), up)
-        val pos = h2.update(0.1f, dir(0.0), listOf(pin)).views.single().pos
-        // Expected: 90 deg right of the mark = sensor azimuth 20, elevation 20.
+        val pos = h2.update(0.1f, dir(0.0), listOf(note("p", p)), null).views.single().pos
         val expected = dir(20.0, 20.0)
-        for (i in 0..2) assertEquals(expected[i] * 2f, pos[i], 1e-3f)
+        for (i in 0..2) assertEquals(expected[i] * cfg.homePinDistanceM.toFloat(), pos[i], 1e-3f)
     }
 
-    @Test fun freshPinDoesNotLockItselfUntilLookedAway() {
+    @Test fun standGoesToTheFloorSpotTheCrosshairHits() {
         val h = HomeTracker(cfg)
         h.align(dir(0.0), up)
-        val pin = HomePin("p", "s", 0.0, 0.0, 2.0, "x", 0)
-        h.suppressLock(pin)
+        // 45 deg down from 1.4 m height hits the floor 1.4 m away.
+        val p = h.placementFromAim(HomeObjectKind.GEAR, dir(90.0, -45.0))!!
+        assertEquals(90.0, p.relAzimuthDeg, 1e-3)
+        assertEquals(cfg.cameraHeightM, p.distanceM, 1e-3)
+        // Level or upward aim: default distance. Steep down: clamped to the minimum.
+        assertEquals(cfg.homeGearDefaultDistanceM, h.floorDistance(5.0), 1e-9)
+        assertEquals(cfg.homeGearMinDistanceM, h.floorDistance(-89.0), 1e-9)
+
+        val v = h.update(0.1f, dir(0.0), listOf(stand("a", p)), null).views.single()
+        // Centre of the figure: on the floor plus half its height.
+        assertEquals((-cfg.cameraHeightM + cfg.gearStandHeightM / 2).toFloat(), v.pos[2], 1e-4f)
+        assertEquals(cfg.cameraHeightM.toFloat(), v.pos[0], 1e-3f)
+        // Faces the player: object at azimuth 90, front at 270.
+        assertEquals(270f, v.yawDeg, 1e-3f)
+        assertEquals(gear, v.gear)
+        assertEquals(h.tierGlitch(GearTier.LOCKED), v.baseGlitch, 1e-6f)
+    }
+
+    @Test fun tiersGetMoreStableFromStaticToResonant() {
+        val h = HomeTracker(cfg)
+        val g = GearTier.values().map { h.tierGlitch(it) }
+        assertTrue(g.zipWithNext().all { (a, b) -> a > b })
+    }
+
+    @Test fun carriedObjectFollowsTheCrosshairNeverLocksAndHidesItsStoredCopy() {
+        val h = HomeTracker(cfg)
+        h.align(dir(0.0), up)
+        val stored = note("a", Placement(0.0, 0.0, 2.0))
+        val carried = stored.copy() // moving "a"
         var locked = false
-        repeat(180) { if (h.update(1f / 60f, dir(0.0), listOf(pin)).events.any { it is WorldTracker.Event.Locked }) locked = true }
+        var frame = h.update(0.1f, dir(60.0), listOf(stored), carried)
+        repeat(180) {
+            frame = h.update(1f / 60f, dir(60.0), listOf(stored), carried)
+            if (frame.events.any { it is WorldTracker.Event.Locked }) locked = true
+        }
         assertFalse(locked)
-        repeat(10) { h.update(1f / 60f, dir(90.0), listOf(pin)) }
-        repeat(180) { if (h.update(1f / 60f, dir(0.0), listOf(pin)).events.any { it is WorldTracker.Event.Locked }) locked = true }
+        val v = frame.views.single()
+        assertFalse(v.lockable)
+        val expected = dir(60.0)
+        for (i in 0..2) assertEquals(expected[i] * cfg.homePinDistanceM.toFloat(), v.pos[i], 1e-3f)
+    }
+
+    @Test fun freshObjectDoesNotLockItselfUntilLookedAway() {
+        val h = HomeTracker(cfg)
+        h.align(dir(0.0), up)
+        val o = note("p", Placement(0.0, 0.0, 2.0))
+        h.suppressLock(o)
+        var locked = false
+        repeat(180) { if (h.update(1f / 60f, dir(0.0), listOf(o), null).events.any { it is WorldTracker.Event.Locked }) locked = true }
+        assertFalse(locked)
+        repeat(10) { h.update(1f / 60f, dir(90.0), listOf(o), null) }
+        repeat(180) { if (h.update(1f / 60f, dir(0.0), listOf(o), null).events.any { it is WorldTracker.Event.Locked }) locked = true }
         assertTrue(locked)
     }
 
     @Test fun idsAreRecognisable() {
-        val n = HomePin("abc", "s", 0.0, 0.0, 2.0, "x", 0).asNode()
-        assertTrue(HomePin.isHomeNodeId(n.id))
-        assertEquals("abc", HomePin.pinIdOf(n.id))
-        assertFalse(HomePin.isHomeNodeId("abc"))
+        val n = note("abc", Placement(0.0, 0.0, 2.0)).asNode()
+        assertTrue(HomeObject.isHomeNodeId(n.id))
+        assertEquals("abc", HomeObject.objectIdOf(n.id))
+        assertFalse(HomeObject.isHomeNodeId("abc"))
+    }
+}
+
+class GearTest {
+    @Test fun catalogueMatchesTheLootSystem() {
+        assertEquals(8, GearType.values().size)
+        assertEquals(3, GearType.values().count { it.slot == GearSlot.OFFENSE })
+        assertEquals(3, GearType.values().count { it.slot == GearSlot.DEFENSE })
+        assertEquals(2, GearType.values().count { it.slot == GearSlot.UTILITY })
+        assertEquals(listOf(1, 2, 3, 4), GearTier.values().map { it.number })
+    }
+
+    @Test fun stashHasTwentySlotsByDefault() {
+        val slots = Config().stashSlots
+        assertTrue(Stash.hasRoom(slots - 1, slots))
+        assertFalse(Stash.hasRoom(slots, slots))
+    }
+
+    @Test fun lockSteadiesFromTheRestingGlitch() {
+        assertEquals(1f, LockEngine.glitchFor(0f), 1e-6f)
+        assertEquals(0.15f, LockEngine.glitchFor(1f), 1e-6f)
+        // Never fully static: a trace of instability always remains (Art Constraints 6).
+        assertEquals(0.05f, LockEngine.glitchFor(1f, 0.22f), 1e-6f)
+        assertEquals(0.55f * 0.15f, LockEngine.glitchFor(1f, 0.55f), 1e-6f)
     }
 }

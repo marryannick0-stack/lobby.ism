@@ -50,8 +50,24 @@ object ConfigLoader {
             nodeSizeM = j.optDouble("nodeSizeM", d.nodeSizeM),
             homePinDistanceM = j.optDouble("homePinDistanceM", d.homePinDistanceM),
             homeNodeSizeM = j.optDouble("homeNodeSizeM", d.homeNodeSizeM),
+            gearStandHeightM = j.optDouble("gearStandHeightM", d.gearStandHeightM),
+            homeGearDefaultDistanceM = j.optDouble("homeGearDefaultDistanceM", d.homeGearDefaultDistanceM),
+            homeGearMinDistanceM = j.optDouble("homeGearMinDistanceM", d.homeGearMinDistanceM),
+            homeGearMaxDistanceM = j.optDouble("homeGearMaxDistanceM", d.homeGearMaxDistanceM),
+            gearTierGlitch = doubles(j.optJSONArray("gearTierGlitch"), d.gearTierGlitch),
+            stashSlots = j.optInt("stashSlots", d.stashSlots),
             tutorial = loadTutorial(j.optJSONObject("tutorial"), d.tutorial),
         )
+    }
+
+    /** A JSON number array, or the fallback if missing or malformed. */
+    private fun doubles(a: org.json.JSONArray?, fallback: List<Double>): List<Double> {
+        if (a == null || a.length() == 0) return fallback
+        return try {
+            List(a.length()) { a.getDouble(it) }
+        } catch (e: Exception) {
+            fallback
+        }
     }
 
     private fun loadTutorial(j: JSONObject?, d: TutorialConfig): TutorialConfig {

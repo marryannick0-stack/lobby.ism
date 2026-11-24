@@ -8,6 +8,8 @@ import android.opengl.Matrix
 import android.os.SystemClock
 import android.util.Size
 import com.lobbyism.app.core.Config
+import com.lobbyism.app.core.GearTier
+import com.lobbyism.app.core.GearType
 import com.lobbyism.app.core.WorldTracker
 import com.lobbyism.app.feedback.SensoryFeedback
 import com.lobbyism.app.sensors.OrientationTracker
@@ -58,6 +60,30 @@ class ArRenderer(
     private var nodeVertexCount = 0
     private var pillarBuffer = 0
     private var pillarVertexCount = 0
+
+    // Armour stands: one neutral figure (plus a thinned one for Ghost Protocol),
+    // one part per gear type, one aura for the resonant tier.
+    private var standBuffer = 0
+    private var standCount = 0
+    private var ghostStandBuffer = 0
+    private var ghostStandCount = 0
+    private val partBuffers = IntArray(GearType.values().size)
+    private val partCounts = IntArray(GearType.values().size)
+    private var auraBuffer = 0
+    private var auraCount = 0
+
+    // Uniform/attribute locations of the point program, looked up once per GL context.
+    private var aPos = 0
+    private var aSeed = 0
+    private var uMvp = 0
+    private var uGlitch = 0
+    private var uMaterialize = 0
+    private var uPointSize = 0
+    private var uLock = 0
+    private var uColor = 0
+    private var uPulseAmount = 0
+    private var uTime = 0
+    private var pixelsPerMetre = 1f
     private var layerFbo = 0
     private var layerTexture = 0
     private var layerW = 1
@@ -121,6 +147,35 @@ class ArRenderer(
         val pillarData = NodeGeometry.pillar(PILLAR_POINTS, PILLAR_HEIGHT_M)
         pillarVertexCount = pillarData.size / NodeGeometry.FLOATS_PER_VERTEX
         pillarBuffer = GlUtil.staticBuffer(pillarData)
+
+        val stand = GearGeometry.stand(STAND_POINTS, ghostTorso = false)
+        standCount = stand.size / NodeGeometry.FLOATS_PER_VERTEX
+        standBuffer = GlUtil.staticBuffer(stand)
+        val ghostStand = GearGeometry.stand(STAND_POINTS, ghostTorso = true)
+        ghostStandCount = ghostStand.size / NodeGeometry.FLOATS_PER_VERTEX
+        ghostStandBuffer = GlUtil.staticBuffer(ghostStand)
+        for (type in GearType.values()) {
+            val part = GearGeometry.part(type, PART_POINTS)
+            partCounts[type.ordinal] = part.size / NodeGeometry.FLOATS_PER_VERTEX
+            partBuffers[type.ordinal] = GlUtil.staticBuffer(part)
+        }
+        val aura = GearGeometry.aura(AURA_POINTS)
+        auraCount = aura.size / NodeGeometry.FLOATS_PER_VERTEX
+        auraBuffer = GlUtil.staticBuffer(aura)
+
+        if (pointsProgram != 0) {
+            val p = pointsProgram
+            aPos = GLES20.glGetAttribLocation(p, "aPos")
+            aSeed = GLES20.glGetAttribLocation(p, "aSeed")
+            uMvp = GLES20.glGetUniformLocation(p, "uMvp")
+            uGlitch = GLES20.glGetUniformLocation(p, "uGlitch")
+            uMaterialize = GLES20.glGetUniformLocation(p, "uMaterialize")
+            uPointSize = GLES20.glGetUniformLocation(p, "uPointSize")
+            uLock = GLES20.glGetUniformLocation(p, "uLock")
+            uColor = GLES20.glGetUniformLocation(p, "uColor")
+            uPulseAmount = GLES20.glGetUniformLocation(p, "uPulseAmount")
+            uTime = GLES20.glGetUniformLocation(p, "uTime")
+        }
 
         layerFbo = 0
         layerTexture = 0
@@ -265,67 +320,97 @@ class ArRenderer(
     }
 
     private fun drawPoints(views: List<WorldTracker.NodeView>, time: Float) {
-        val p = pointsProgram
-        GLES20.glUseProgram(p)
+        GLES20.glUseProgram(pointsProgram)
         // Additive light: overlapping points get brighter. Alpha accumulates for the composite pass.
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFuncSeparate(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE, GLES20.GL_ONE, GLES20.GL_ONE)
-
-        val aPos = GLES20.glGetAttribLocation(p, "aPos")
-        val aSeed = GLES20.glGetAttribLocation(p, "aSeed")
-        val uMvp = GLES20.glGetUniformLocation(p, "uMvp")
-        val uGlitch = GLES20.glGetUniformLocation(p, "uGlitch")
-        val uMaterialize = GLES20.glGetUniformLocation(p, "uMaterialize")
-        val uPointSize = GLES20.glGetUniformLocation(p, "uPointSize")
-        val uLock = GLES20.glGetUniformLocation(p, "uLock")
-        val uColor = GLES20.glGetUniformLocation(p, "uColor")
-        val uPulseAmount = GLES20.glGetUniformLocation(p, "uPulseAmount")
-        GLES20.glUniform1f(GLES20.glGetUniformLocation(p, "uTime"), time)
+        GLES20.glUniform1f(uTime, time)
+        GLES20.glEnableVertexAttribArray(aPos)
+        GLES20.glEnableVertexAttribArray(aSeed)
 
         // Size in pixels of a 1 m object at 1 m distance, for perspective point sizes.
-        val pixelsPerMetre = layerH / (2f * tan(fovYRad / 2f))
-        val stride = NodeGeometry.FLOATS_PER_VERTEX * 4
+        pixelsPerMetre = layerH / (2f * tan(fovYRad / 2f))
 
         for (v in views) {
-            val isNode = v.stage == WorldTracker.Stage.MATERIALIZED
-            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, if (isNode) nodeBuffer else pillarBuffer)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, stride, 0)
-            GLES20.glEnableVertexAttribArray(aSeed)
-            GLES20.glVertexAttribPointer(aSeed, 1, GLES20.GL_FLOAT, false, stride, 12)
-
-            Matrix.setIdentityM(model, 0)
-            Matrix.translateM(model, 0, v.pos[0], v.pos[1], v.pos[2])
-            if (isNode) {
-                // The node stays in place; only its fragments turn slowly around the vertical axis.
-                // Home pins turn slower still: personal, static (GDD: home = warm and calm).
-                val spin = if (v.home) HOME_SPIN_DEG_PER_S else NODE_SPIN_DEG_PER_S
-                Matrix.rotateM(model, 0, time * spin, 0f, 0f, 1f)
-                val s = (if (v.home) cfg.homeNodeSizeM else cfg.nodeSizeM).toFloat()
-                Matrix.scaleM(model, 0, s, s, s)
-            }
-            Matrix.multiplyMM(mvp, 0, vp, 0, model, 0)
-
-            GLES20.glUniformMatrix4fv(uMvp, 1, false, mvp, 0)
-            GLES20.glUniform1f(uGlitch, v.glitch)
-            GLES20.glUniform1f(uMaterialize, if (isNode) v.materialize else 1f)
-            GLES20.glUniform1f(uLock, v.lock)
-            GLES20.glUniform1f(uPointSize, pixelsPerMetre * (if (isNode) NODE_POINT_M else PILLAR_POINT_M))
-            // Pale phosphor, like an old sonar tube. Deliberately not neon.
-            // Home pins: warm amber. Told apart by colour AND by a calmer pulse (art constraint 12).
             when {
-                v.home -> GLES20.glUniform3f(uColor, 1.00f, 0.80f, 0.55f)
-                isNode -> GLES20.glUniform3f(uColor, 0.80f, 1.00f, 0.86f)
-                else -> GLES20.glUniform3f(uColor, 0.62f, 0.80f, 0.70f)
+                v.gear != null -> drawStand(v, v.gear.type, v.gear.tier)
+                v.stage == WorldTracker.Stage.MATERIALIZED -> {
+                    // The node stays in place; only its fragments turn slowly around the vertical axis.
+                    // Home notes turn slower still: personal, static (GDD: home = warm and calm).
+                    Matrix.setIdentityM(model, 0)
+                    Matrix.translateM(model, 0, v.pos[0], v.pos[1], v.pos[2])
+                    Matrix.rotateM(model, 0, time * (if (v.home) HOME_SPIN_DEG_PER_S else NODE_SPIN_DEG_PER_S), 0f, 0f, 1f)
+                    val s = (if (v.home) cfg.homeNodeSizeM else cfg.nodeSizeM).toFloat()
+                    Matrix.scaleM(model, 0, s, s, s)
+                    // Pale phosphor for public nodes, warm amber for home objects.
+                    // Always paired with a different pulse (Art Constraints 12).
+                    val c = if (v.home) WARM else PHOSPHOR
+                    drawCloud(nodeBuffer, nodeVertexCount, v.glitch, v.materialize, v.lock, NODE_POINT_M, c, if (v.home) 0.25f else 1f)
+                }
+                else -> {
+                    Matrix.setIdentityM(model, 0)
+                    Matrix.translateM(model, 0, v.pos[0], v.pos[1], v.pos[2])
+                    drawCloud(pillarBuffer, pillarVertexCount, v.glitch, 1f, 0f, PILLAR_POINT_M, PILLAR, 1f)
+                }
             }
-            GLES20.glUniform1f(uPulseAmount, if (v.home) 0.25f else 1f)
-
-            GLES20.glDrawArrays(GLES20.GL_POINTS, 0, if (isNode) nodeVertexCount else pillarVertexCount)
         }
         GLES20.glDisableVertexAttribArray(aPos)
         GLES20.glDisableVertexAttribArray(aSeed)
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
         GLES20.glDisable(GLES20.GL_BLEND)
+    }
+
+    /**
+     * An armour stand: dim neutral figure, the gear part bright in its body zone,
+     * and for the resonant tier an aura. Stands do not spin: they face the player.
+     */
+    private fun drawStand(v: WorldTracker.NodeView, type: GearType, tier: GearTier) {
+        val scale = (cfg.gearStandHeightM / GearGeometry.FIGURE_HEIGHT_M).toFloat()
+        Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, v.pos[0], v.pos[1], v.pos[2])
+        // Local front is +y (azimuth 0). Azimuth runs clockwise, GL rotation counter-clockwise.
+        Matrix.rotateM(model, 0, -v.yawDeg, 0f, 0f, 1f)
+        Matrix.scaleM(model, 0, scale, scale, scale)
+
+        val ghost = type == GearType.GHOST_PROTOCOL
+        drawCloud(
+            if (ghost) ghostStandBuffer else standBuffer, if (ghost) ghostStandCount else standCount,
+            v.glitch, v.materialize, v.lock, STAND_POINT_M, WARM_DIM, 0.25f,
+        )
+        // The part is the information: a bit steadier than the figure, so it stays readable.
+        drawCloud(
+            partBuffers[type.ordinal], partCounts[type.ordinal],
+            v.glitch * PART_GLITCH_FACTOR, v.materialize, v.lock, PART_POINT_M, WARM, 0.25f,
+        )
+        if (tier == GearTier.RESONANT) {
+            drawCloud(auraBuffer, auraCount, AURA_GLITCH, v.materialize, 0f, STAND_POINT_M, WARM_DIM, 1f)
+        }
+    }
+
+    /** Draws one point cloud with the current [model] matrix. No allocation. */
+    private fun drawCloud(
+        buffer: Int,
+        count: Int,
+        glitch: Float,
+        materialize: Float,
+        lock: Float,
+        pointM: Float,
+        color: FloatArray,
+        pulseAmount: Float,
+    ) {
+        Matrix.multiplyMM(mvp, 0, vp, 0, model, 0)
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, buffer)
+        val stride = NodeGeometry.FLOATS_PER_VERTEX * 4
+        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, stride, 0)
+        GLES20.glVertexAttribPointer(aSeed, 1, GLES20.GL_FLOAT, false, stride, 12)
+        GLES20.glUniformMatrix4fv(uMvp, 1, false, mvp, 0)
+        GLES20.glUniform1f(uGlitch, glitch)
+        GLES20.glUniform1f(uMaterialize, materialize)
+        GLES20.glUniform1f(uLock, lock)
+        GLES20.glUniform1f(uPointSize, pixelsPerMetre * pointM)
+        GLES20.glUniform3f(uColor, color[0], color[1], color[2])
+        GLES20.glUniform1f(uPulseAmount, pulseAmount)
+        GLES20.glDrawArrays(GLES20.GL_POINTS, 0, count)
     }
 
     private fun drawComposite(time: Float) {
@@ -361,6 +446,21 @@ class ArRenderer(
         const val PILLAR_POINT_M = 0.09f
         const val NODE_SPIN_DEG_PER_S = 9f
         const val HOME_SPIN_DEG_PER_S = 3f
+
+        // Armour stands: point budgets (Galaxy A50) and look.
+        const val STAND_POINTS = 520
+        const val PART_POINTS = 420
+        const val AURA_POINTS = 260
+        const val STAND_POINT_M = 0.012f
+        const val PART_POINT_M = 0.016f
+        const val PART_GLITCH_FACTOR = 0.7f
+        const val AURA_GLITCH = 0.6f
+
+        // Colours (RGB 0..1). Pale phosphor, never neon; warm amber marks private home objects.
+        val PHOSPHOR = floatArrayOf(0.80f, 1.00f, 0.86f)
+        val PILLAR = floatArrayOf(0.62f, 0.80f, 0.70f)
+        val WARM = floatArrayOf(1.00f, 0.80f, 0.55f)
+        val WARM_DIM = floatArrayOf(0.55f, 0.42f, 0.30f)
         const val PULSE_DECAY_S = 0.45f
         const val BASE_ABERRATION = 0.0022f
     }
