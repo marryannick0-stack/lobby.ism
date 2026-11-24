@@ -55,7 +55,7 @@ Everything rendered lives in the sensor frame of `GAME_ROTATION_VECTOR`: origin 
 
 Schema changes: bump the version in `NodeStore`, add a step in `onUpgrade`, never edit an old step.
 
-Backups: `allowBackup=false` plus `res/xml/data_extraction_rules.xml` exclude all app data from cloud backup and device-to-device transfer, so private data cannot leave the phone that way either.
+Backups: `allowBackup=false` plus `res/xml/data_extraction_rules.xml` (Android 12+) and `res/xml/backup_rules.xml` (older) exclude all app data from cloud backup and device-to-device transfer, so private data cannot leave the phone that way either.
 
 ## Open lint warnings (accepted for now)
 
@@ -63,7 +63,8 @@ Backups: `allowBackup=false` plus `res/xml/data_extraction_rules.xml` exclude al
 |---|---|---|
 | SetTextI18n | UI text is German-only and built in code | adding a second language |
 | ViewConstructor | Views are created in code, never from XML | — |
-| LockedOrientationActivity | AR view is portrait by design | tablet support |
+| LockedOrientationActivity, DiscouragedApi | AR view is portrait by design | tablet support |
+| UnnecessaryRequiredFeature (GPS) | Outdoor play needs GPS; the home base alone would not | a home-only mode |
 | OldTargetApi | targetSdk 35 needs AGP upgrade for 36 | before any store release |
 
 ## Deliberate deviations from the Android guide
