@@ -1,4 +1,4 @@
-package com.lobbyism.app.ui
+package com.lobbyism.app.ui.tutorial
 
 import android.content.Context
 import android.graphics.Typeface
@@ -10,6 +10,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.lobbyism.app.core.Tutorial
+import com.lobbyism.app.ui.theme.Theme
 
 /**
  * The tutorial card at the top of the screen.
@@ -25,18 +26,18 @@ class TutorialOverlay(
 ) : LinearLayout(context) {
 
     private val density = resources.displayMetrics.density
-    private val mono = Typeface.MONOSPACE
-    private val monoBold = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+    private val mono = Theme.MONO
+    private val monoBold = Theme.MONO_BOLD
 
-    private val header = label(11f, monoBold, DIM)
-    private val title = label(19f, monoBold, PHOSPHOR)
-    private val body = label(14.5f, mono, PHOSPHOR).apply { setLineSpacing(0f, 1.3f) }
-    private val live = label(13f, monoBold, PHOSPHOR)
-    private val bar = label(13f, monoBold, PHOSPHOR)
-    private val hint = label(13f, mono, AMBER).apply { setLineSpacing(0f, 1.25f) }
+    private val header = label(11f, monoBold, Theme.PHOSPHOR_DIM)
+    private val title = label(19f, monoBold, Theme.PHOSPHOR)
+    private val body = label(14.5f, mono, Theme.PHOSPHOR).apply { setLineSpacing(0f, 1.3f) }
+    private val live = label(13f, monoBold, Theme.PHOSPHOR)
+    private val bar = label(13f, monoBold, Theme.PHOSPHOR)
+    private val hint = label(13f, mono, Theme.AMBER).apply { setLineSpacing(0f, 1.25f) }
     private val primary = button(true).apply { setOnClickListener { onPrimary() } }
     private val secondary = button(false).apply { setOnClickListener { onSecondary() } }
-    private val skip = label(11f, mono, DIM).apply {
+    private val skip = label(11f, mono, Theme.PHOSPHOR_DIM).apply {
         text = "TUTORIAL BEENDEN"
         setPadding(0, dp(12), 0, dp(2))
         setOnClickListener { onSkip() }
@@ -48,8 +49,8 @@ class TutorialOverlay(
         orientation = VERTICAL
         setPadding(dp(18), dp(14), dp(18), dp(12))
         background = GradientDrawable().apply {
-            setColor(0xE6050A08.toInt())
-            setStroke(dp(1), 0xB3CDFFDB.toInt())
+            setColor(Theme.PANEL_FILL_STRONG)
+            setStroke(dp(1), Theme.PHOSPHOR_OUTLINE)
         }
         isClickable = true // touches on the card do not fall through to the camera view
 
@@ -130,10 +131,10 @@ class TutorialOverlay(
         minimumHeight = 0
         stateListAnimator = null
         setPadding(dp(16), 0, dp(16), 0)
-        setTextColor(if (filled) 0xFF050A08.toInt() else PHOSPHOR)
+        setTextColor(if (filled) Theme.INK else Theme.PHOSPHOR)
         background = GradientDrawable().apply {
-            setColor(if (filled) PHOSPHOR else 0x00000000)
-            setStroke(dp(1), PHOSPHOR)
+            setColor(if (filled) Theme.PHOSPHOR else 0x00000000)
+            setStroke(dp(1), Theme.PHOSPHOR)
         }
         gravity = Gravity.CENTER
     }
@@ -143,10 +144,4 @@ class TutorialOverlay(
 
     private fun dp(v: Int): Int = (v * density + 0.5f).toInt()
 
-    private companion object {
-        const val PHOSPHOR = 0xFFCDFFDB.toInt()
-        const val DIM = 0x99CDFFDB.toInt()
-        /** Hints use a second hue AND a leading marker, so colour is never the only signal. */
-        const val AMBER = 0xFFFFD27A.toInt()
-    }
 }

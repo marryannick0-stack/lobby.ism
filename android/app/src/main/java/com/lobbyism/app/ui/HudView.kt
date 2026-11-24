@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.view.View
 import com.lobbyism.app.net.SyncEngine
+import com.lobbyism.app.ui.theme.Theme
 import kotlin.math.sin
 
 /**
@@ -51,7 +52,7 @@ class HudView(context: Context) : View(context) {
     private val mono = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
 
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = PHOSPHOR
+        color = Theme.PHOSPHOR
         typeface = mono
         textSize = 12.5f * density
         letterSpacing = 0.06f
@@ -59,11 +60,11 @@ class HudView(context: Context) : View(context) {
         setShadowLayer(4f * density, 0f, 0f, 0xE6000000.toInt())
     }
     private val ghost = Paint(text).apply {
-        color = GHOST_RED
+        color = Theme.GHOST_RED
         clearShadowLayer()
     }
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = PHOSPHOR
+        color = Theme.PHOSPHOR
         style = Paint.Style.STROKE
         strokeWidth = 1.6f * density
         strokeCap = Paint.Cap.BUTT
@@ -224,8 +225,5 @@ class HudView(context: Context) : View(context) {
 
     private companion object {
         const val TURN_HINT_MIN_DEG = 12.0
-        /** Pale phosphor green-white. */
-        const val PHOSPHOR = 0xFFCDFFDB.toInt()
-        const val GHOST_RED = 0x55FF5A4A
     }
 }

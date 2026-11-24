@@ -31,9 +31,20 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Unit tests and debug APK
+      - name: Unit tests, lint and debug APK
         working-directory: android
-        run: gradle --no-daemon --stacktrace testDebugUnitTest assembleDebug
+        run: gradle --no-daemon --stacktrace testDebugUnitTest lintDebug assembleDebug
+
+      # Reports stay available for every run, also when a step above failed.
+      - name: Keep test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            android/app/build/reports/
+            android/app/build/test-results/
+          if-no-files-found: ignore
 
       - name: Name the APK after the build number
         run: cp android/app/build/outputs/apk/debug/app-debug.apk lobbyism-${{ github.run_number }}.apk
@@ -61,9 +72,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Type-check and build the server module
+      - name: Type-check, build and test the server module
         working-directory: server
         run: |
           npm ci
           npm run build
           test -s build/index.js
+          npm test

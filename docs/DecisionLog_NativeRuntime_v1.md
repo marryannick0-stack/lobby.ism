@@ -1,7 +1,7 @@
 # LOBBYISM — Decision Log: Native Runtime (Unity-Ablösung)
 
-**Version:** 1.0
-**Datum:** 16. November 2026
+**Version:** 1.1
+**Datum:** 24. November 2026 (Erstfassung 16. November 2026)
 **Status:** Entschieden für Phase 0a. Offene Punkte am Ende.
 **Autorität:** Überschreibt den Abschnitt „Tech Stack" und die Client-Struktur in `CLAUDE.md` sowie Engine-Angaben in GDD v2–v4. Gameplay-Regeln (R1–R6), Node-Datenmodell und Phasenplan bleiben unverändert gültig.
 
@@ -92,6 +92,31 @@
 
 ---
 
+## ENTSCHIEDEN — N7: Schichtenarchitektur und Arbeitsweise pro Feld
+
+**Problem:** Der Hauptbildschirm war auf über 1000 Zeilen gewachsen. Jede Arbeit an einem Feld (Säule, Home-Base, Tutorial) hätte dieselbe Datei berührt und damit andere Felder gefährdet.
+
+**Entscheidung:**
+
+- Aufbau nach dem Android-Architekturleitfaden: UI-Schicht, Daten-Schicht mit Repositories, reine Logik in `core/`. Daten fließen nur in eine Richtung.
+- Pro Feld ein eigener Zustandshalter (`HomeController`, `TutorialController`), dazu `GameLoop` für den Takt pro Frame und `MainActivity` nur noch als Verdrahtung.
+- `NodeRepository` und `HomeRepository` sind der einzige Zugang zu Daten. Home-Daten haben keinen Netzwerkpfad.
+- Das gesamte Aussehen der Bedienoberfläche liegt in `ui/theme/Theme.kt`.
+- `CLAUDE.md` im Repository, pfadgebundene Regeln in `.claude/rules/`, Feld-Karte in `docs/ARCHITECTURE.md`.
+- Build-Automatik prüft Kotlin-Tests, Android Lint und Server-Tests bei jedem Push.
+
+**Bewusste Abweichungen vom Leitfaden:**
+
+| Regel | Bruch | Wirkung | Passt zur Absicht |
+|---|---|---|---|
+| ViewModel als Zustandshalter (stark empfohlen) | einfache Kotlin-Klassen | keine Bibliothek nötig; Überleben bei Neuaufbau entfällt | ja: App ist hochkant fixiert und behandelt Konfigurationswechsel selbst |
+| Coroutines/Flow für beobachtbaren Zustand | `@Volatile`-Schnappschüsse, pro Frame gelesen | keine zusätzlichen Threads oder Allokationen im Render-Takt | ja |
+| Jetpack Compose | Android-Views im Code | keine Abhängigkeit | ja: die Oberfläche ist eine dünne Schicht über dem GL-Bild |
+
+**Konsequenz:** Jede Fokus-Session nimmt sich ein Feld vor, liest dessen Zeile in `docs/ARCHITECTURE.md` und ändert nur die dort genannten Dateien.
+
+---
+
 ## Zusammenfassung
 
 | # | Entscheidung | Status |
@@ -103,6 +128,7 @@
 | N4 | Pinning + Himmelssäule | ✅ umgesetzt, ungetestet am Gerät |
 | N5 | Offline-first, Nakama über REST | ✅ Client umgesetzt; Server nur gegen Attrappe getestet |
 | N6 | SensoryFeedback + Glitch | ✅ umgesetzt |
+| N7 | Schichtenarchitektur, Feld-Karte, CLAUDE.md, CI-Prüfungen | ✅ umgesetzt |
 
 ## Offene Punkte
 
@@ -117,3 +143,4 @@
 ---
 
 *v1.0 — 16.11.2026 — Erstfassung nach Umstellung auf native Runtime.*
+*v1.1 — 24.11.2026 — N7 ergänzt: Schichtenarchitektur und Arbeitsweise pro Feld. Home-Base (Stationen) und Tutorial sind seit Build 2/3 umgesetzt.*

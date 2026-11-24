@@ -1,67 +1,46 @@
 package com.lobbyism.app.ui
 
-import android.Manifest
-import android.animation.ValueAnimator
 import android.app.Activity
-import android.app.AlertDialog
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.SurfaceTexture
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings as SystemSettings
-import android.text.InputFilter
-import android.text.InputType
-import android.text.format.DateUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.Button
-import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
-import android.widget.Toast
 import com.lobbyism.app.camera.CameraFeed
 import com.lobbyism.app.core.Config
-import com.lobbyism.app.core.ContentStatus
-import com.lobbyism.app.core.ContentType
-import com.lobbyism.app.core.Geo
-import com.lobbyism.app.core.HeadingEstimator
-import com.lobbyism.app.core.HomePin
-import com.lobbyism.app.core.HomeStation
-import com.lobbyism.app.core.HomeTracker
-import com.lobbyism.app.core.Node
-import com.lobbyism.app.core.Tutorial
-import com.lobbyism.app.core.WorldTracker
 import com.lobbyism.app.data.ConfigLoader
+import com.lobbyism.app.data.HomeRepository
+import com.lobbyism.app.data.NodeRepository
 import com.lobbyism.app.data.NodeStore
+import com.lobbyism.app.data.Settings
 import com.lobbyism.app.feedback.Haptics
 import com.lobbyism.app.feedback.SensoryFeedback
 import com.lobbyism.app.feedback.SignalAudio
-import com.lobbyism.app.net.Settings
-import com.lobbyism.app.net.SyncEngine
 import com.lobbyism.app.render.ArRenderer
 import com.lobbyism.app.sensors.LocationTracker
 import com.lobbyism.app.sensors.OrientationTracker
-import java.util.UUID
+import com.lobbyism.app.ui.home.HomeController
+import com.lobbyism.app.ui.theme.Theme
+import com.lobbyism.app.ui.tutorial.TutorialController
 
 /**
- * The one screen of Phase 0a: camera, world layer, HUD.
+ * The app's single screen. Composition root and lifecycle owner only:
+ * it builds every part, wires them together and starts/stops them with the
+ * activity. No game logic lives here.
  *
- * This class only wires the parts together and owns the lifecycle:
- *   sensors + GPS  ->  WorldTracker (what is where)  ->  ArRenderer (draws it)
- *                                   \->  SensoryFeedback (haptics, sound, glitch)
- *   NodeStore (phone)  <->  SyncEngine  <->  server
+ * Where things live:
+ *   core/      pure logic, unit-tested       data/   repositories, storage, settings
+ *   sensors/   gyro + GPS                    net/    server sync
+ *   camera/    camera image                  render/ OpenGL engine
+ *   feedback/  haptics, sound                ui/     this screen and its state holders
  */
-class MainActivity : Activity(), ArRenderer.Scene {
+class MainActivity : Activity() {
 
     private lateinit var cfg: Config
     private lateinit var settings: Settings
@@ -69,54 +48,24 @@ class MainActivity : Activity(), ArRenderer.Scene {
     private lateinit var orientation: OrientationTracker
     private lateinit var location: LocationTracker
     private lateinit var camera: CameraFeed
+    private lateinit var nodes: NodeRepository
     private lateinit var renderer: ArRenderer
-    private lateinit var tracker: WorldTracker
-    private lateinit var heading: HeadingEstimator
-    private lateinit var sync: SyncEngine
     private lateinit var haptics: Haptics
     private lateinit var audio: SignalAudio
-    private lateinit var tutorial: Tutorial
-    private lateinit var homeTracker: HomeTracker
 
+    private lateinit var dialogs: Dialogs
+    private lateinit var permissions: PermissionGate
+    private lateinit var home: HomeController
+    private lateinit var tutorial: TutorialController
+    private lateinit var loop: GameLoop
+    private lateinit var buttons: ActionButtons
+    private lateinit var card: ContentCard
     private lateinit var glView: GLSurfaceView
-    private lateinit var hud: HudView
-    private lateinit var card: TextView
-    private lateinit var placeButton: Button
-    private lateinit var blocker: LinearLayout
-    private lateinit var blockerText: TextView
-    private lateinit var tutorialOverlay: TutorialOverlay
-    private lateinit var homeButton: Button
-    private lateinit var alignButton: Button
 
     private val main = Handler(Looper.getMainLooper())
+    private val pose = PoseCache()
     private var resumed = false
-    private var cardAnimator: ValueAnimator? = null
-
-    // --- state shared between the main thread and the GL thread ---
-    @Volatile private var nodes: List<Node> = emptyList()
-    @Volatile private var headingOffsetDeg: Double? = null
-    @Volatile private var headingConfidence = 0f
-    @Volatile private var lastSensorAzimuthDeg: Double? = null
     @Volatile private var cameraTexture: SurfaceTexture? = null
-    @Volatile private var syncStatus = SyncEngine.Status.LOCAL_ONLY
-    @Volatile private var unsyncedCount = 0
-
-    /** true while the tutorial card is on screen (also during its final "done" card). */
-    @Volatile private var tutorialVisible = false
-    /** Last view handed to the UI thread, so unchanged frames post nothing. */
-    @Volatile private var lastTutorialView: Tutorial.View? = null
-    private var lastPlaceHighlight = false
-
-    // --- home base (see core/HomeBase.kt) ---
-    @Volatile private var homeMode = false
-    @Volatile private var station: HomeStation? = null
-    @Volatile private var homePins: List<HomePin> = emptyList()
-
-    /** Latest pose, copied on the GL thread so the UI thread can aim with it. */
-    private val poseLock = Any()
-    private val lastForward = FloatArray(3)
-    private val lastTop = FloatArray(3)
-    private var hasPose = false
 
     // ------------------------------------------------------------ lifecycle
 
@@ -129,48 +78,46 @@ class MainActivity : Activity(), ArRenderer.Scene {
             }
         }
 
+        // --- data layer ---
         cfg = ConfigLoader.load(this)
         settings = Settings(this)
         store = NodeStore(this)
-        orientation = OrientationTracker(this)
         location = LocationTracker(this, cfg)
-        camera = CameraFeed(this)
-        tracker = WorldTracker(cfg)
-        heading = HeadingEstimator(
-            cfg.headingMinSpeedMps, cfg.headingMaxCourseAccuracyDeg, cfg.headingSamplesNeeded, cfg.headingSmoothing,
+        nodes = NodeRepository(
+            cfg, store, settings,
+            position = { location.fix?.takeIf { it.isFresh() }?.let { doubleArrayOf(it.lat, it.lon) } },
         )
+
+        // --- sensors, camera, feedback ---
+        orientation = OrientationTracker(this)
+        camera = CameraFeed(this)
         haptics = Haptics(this)
         audio = SignalAudio()
-        tutorial = Tutorial(cfg.tutorial)
-        homeTracker = HomeTracker(cfg)
-        tutorialVisible = !settings.tutorialDone
 
-        renderer = ArRenderer(cfg, orientation, camera.previewSize, camera.fovLongSideRad, this) { texture ->
+        // --- UI state holders ---
+        dialogs = Dialogs(this) { enterImmersiveMode() }
+        permissions = PermissionGate(this, settings, dialogs) { if (resumed) startPermissionGated() }
+        home = HomeController(cfg, HomeRepository(store), pose, dialogs) { onHomeChanged() }
+        tutorial = TutorialController(this, cfg.tutorial, settings, onRotateCamera = { rotateCamera() }) { renderButtons() }
+
+        // --- engine ---
+        val hud = HudView(this) // created before rendering starts: the GL thread writes into it
+        loop = GameLoop(cfg, orientation, location, nodes, home, tutorial, pose, hud) { node -> card.show(node) }
+        renderer = ArRenderer(cfg, orientation, camera.previewSize, camera.fovLongSideRad, loop) { texture ->
             // GL thread: a (new) camera texture exists. Open the camera from the main thread.
             cameraTexture = texture
             main.post { openCameraIfPossible() }
         }
         renderer.cameraRotationSteps = settings.cameraRotationSteps
+        location.onFix = loop::onGpsFix
 
-        sync = SyncEngine(
-            cfg, store, settings,
-            position = { location.fix?.takeIf { it.isFresh() }?.let { doubleArrayOf(it.lat, it.lon) } },
-            onResult = { status, changed ->
-                syncStatus = status
-                if (changed) reloadNodes()
-            },
-        )
-
-        location.onFix = { fix -> onGpsFix(fix) }
-
-        buildUi()
-        reloadNodes()
+        buildScreen(hud)
 
         SensoryFeedback.addListener(haptics)
         SensoryFeedback.addListener(audio)
         SensoryFeedback.addListener(renderer)
 
-        if (settings.introSeen) requestMissingPermissions() else showIntro()
+        permissions.begin()
     }
 
     override fun onResume() {
@@ -178,16 +125,14 @@ class MainActivity : Activity(), ArRenderer.Scene {
         resumed = true
         enterImmersiveMode()
         glView.onResume()
-        orientation.start()
-        if (hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) location.start()
-        openCameraIfPossible()
-        sync.start()
-        updateBlocker()
+        startSensorsAndCamera()
+        nodes.startSync()
+        permissions.refresh()
     }
 
     override fun onPause() {
         resumed = false
-        sync.stop()
+        nodes.stopSync()
         camera.close()
         location.stop()
         orientation.stop()
@@ -199,7 +144,7 @@ class MainActivity : Activity(), ArRenderer.Scene {
         SensoryFeedback.removeListener(haptics)
         SensoryFeedback.removeListener(audio)
         SensoryFeedback.removeListener(renderer)
-        cardAnimator?.cancel()
+        card.close()
         audio.release()
         store.close()
         super.onDestroy()
@@ -208,6 +153,128 @@ class MainActivity : Activity(), ArRenderer.Scene {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) enterImmersiveMode()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        this.permissions.onResult(requestCode)
+    }
+
+    // ---------------------------------------------------------------- screen
+
+    /** Layers from back to front: camera + world, HUD, cards, buttons, permission notice. */
+    private fun buildScreen(hud: HudView) {
+        val root = FrameLayout(this)
+
+        glView = GLSurfaceView(this).apply {
+            setEGLContextClientVersion(2)
+            preserveEGLContextOnPause = true
+            setRenderer(renderer)
+            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+        }
+        root.addView(glView, Theme.matchParent())
+        root.addView(hud, Theme.matchParent())
+
+        card = ContentCard(this) { pinId -> home.onPinTapped(pinId) { card.close() } }
+        root.addView(
+            card,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM)
+                .apply { setMargins(dp(Theme.EDGE_DP), 0, dp(Theme.EDGE_DP), dp(CARD_BOTTOM_DP)) },
+        )
+
+        root.addView(
+            tutorial.overlay,
+            // Below the HUD status lines, above the camera centre.
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP)
+                .apply { setMargins(dp(Theme.EDGE_DP), dp(TUTORIAL_TOP_DP), dp(Theme.EDGE_DP), 0) },
+        )
+
+        buttons = ActionButtons(
+            this,
+            onMain = { if (home.isActive) home.onMainAction() else askForText() },
+            onHome = { home.toggle() },
+            onHomeLong = { if (home.isActive) home.manage() },
+            onAlign = { home.align() },
+            onSettings = {
+                SettingsDialog(this, settings, nodes, dialogs, ::rotateCamera) {
+                    card.close()
+                    tutorial.start()
+                }.show()
+            },
+        )
+        buttons.addTo(root)
+        renderButtons()
+
+        root.addView(permissions.blocker, Theme.matchParent())
+        setContentView(root)
+    }
+
+    private fun renderButtons() = buttons.render(home.ui, tutorial.highlightPlace)
+
+    private fun onHomeChanged() {
+        card.close()
+        tutorial.setSuspended(home.isActive)
+        renderButtons()
+    }
+
+    // ----------------------------------------------------------------- nodes
+
+    private fun askForText() {
+        val fix = location.fix?.takeIf { it.isFresh() }
+        if (fix == null) {
+            SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
+            dialogs.toast("Kein Signal. Ohne Position kann nichts hinterlassen werden.")
+            return
+        }
+        val accuracyNote = if (fix.accuracyM > cfg.placeMaxAccuracyM) {
+            "\n\nSignal ungenau (±${fix.accuracyM.toInt()} m). Die Nachricht landet evtl. ein Stück daneben."
+        } else {
+            ""
+        }
+        dialogs.textInput(
+            title = "Hier hinterlassen",
+            message = "Deine Nachricht bleibt an diesem Ort.$accuracyNote",
+            hint = "Was bleibt hier?",
+            maxChars = cfg.textMaxChars,
+            confirm = "Ablegen",
+        ) { text -> placeText(text) }
+    }
+
+    private fun placeText(text: String) {
+        // Position at the moment of confirming, not of opening the dialog: the player may have walked on.
+        val fix = location.fix?.takeIf { it.isFresh() }
+        if (text.isEmpty() || fix == null) {
+            SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
+            dialogs.toast(if (text.isEmpty()) "Leere Nachricht." else "Signal verloren. Nichts abgelegt.")
+            return
+        }
+        val node = nodes.placeText(text, fix.lat, fix.lon)
+        SensoryFeedback.emit(SensoryFeedback.Cue.NODE_PLACED)
+        tutorial.onNodePlaced(node.id)
+    }
+
+    // ------------------------------------------------------ hardware control
+
+    private fun startSensorsAndCamera() {
+        orientation.start()
+        startPermissionGated()
+    }
+
+    /** GPS and camera need runtime permissions; safe to call again after they were granted. */
+    private fun startPermissionGated() {
+        if (permissions.hasLocation) location.start()
+        openCameraIfPossible()
+    }
+
+    private fun openCameraIfPossible() {
+        val texture = cameraTexture ?: return
+        if (!resumed || !permissions.hasCamera) return
+        camera.open(texture) { message -> main.post { dialogs.toast(message) } }
+    }
+
+    private fun rotateCamera() {
+        settings.cameraRotationSteps = settings.cameraRotationSteps + 1
+        renderer.cameraRotationSteps = settings.cameraRotationSteps
     }
 
     @Suppress("DEPRECATION") // WindowInsetsController needs API 30; these flags work on every supported version.
@@ -219,810 +286,10 @@ class MainActivity : Activity(), ArRenderer.Scene {
             )
     }
 
-    // ------------------------------------------------- game loop (GL thread)
-
-    /** Called by the renderer once per frame. Runs on the GL thread. */
-    override fun frame(dtS: Float, poseValid: Boolean, forward: FloatArray, top: FloatArray): List<WorldTracker.NodeView> {
-        val fix = location.fix?.takeIf { it.isFresh() }
-        if (poseValid) {
-            lastSensorAzimuthDeg = WorldTracker.sensorAzimuthDeg(WorldTracker.horizontalForward(forward, top))
-        }
-
-        if (poseValid) {
-            synchronized(poseLock) {
-                System.arraycopy(forward, 0, lastForward, 0, 3)
-                System.arraycopy(top, 0, lastTop, 0, 3)
-                hasPose = true
-            }
-        }
-
-        val inHome = homeMode
-        val frame = when {
-            !poseValid -> null
-            inHome -> homeTracker.update(dtS, forward, homePins)
-            else -> tracker.update(dtS, forward, top, fix?.lat, fix?.lon, fix?.accuracyM ?: 99.0, headingOffsetDeg, nodes)
-        }
-
-        frame?.events?.forEach { e ->
-            when (e) {
-                is WorldTracker.Event.Materialized -> SensoryFeedback.emit(SensoryFeedback.Cue.NODE_MATERIALIZED)
-                is WorldTracker.Event.LockTick -> SensoryFeedback.emit(SensoryFeedback.Cue.LOCK_TICK, e.progress)
-                is WorldTracker.Event.Locked -> {
-                    SensoryFeedback.emit(SensoryFeedback.Cue.LOCK_COMPLETE)
-                    if (tutorialVisible) tutorial.onNodeLocked(e.node.id)
-                    main.post { showCard(e.node) }
-                }
-                is WorldTracker.Event.LockLost -> SensoryFeedback.emit(SensoryFeedback.Cue.LOCK_LOST, 0.5f)
-            }
-        }
-
-        val tutorialView = if (tutorialVisible && !inHome) updateTutorial(dtS, fix, frame, forward, top) else null
-
-        hud.state = HudView.State(
-            gpsEnabled = location.isGpsEnabled,
-            hasFix = fix != null,
-            accuracyM = fix?.accuracyM ?: 0.0,
-            headingReady = headingOffsetDeg != null,
-            headingConfidence = headingConfidence,
-            nodesInRange = (frame?.views?.size ?: 0) + (frame?.hiddenUntilHeading ?: 0),
-            nearestM = frame?.nearestDistanceM,
-            hiddenUntilHeading = frame?.hiddenUntilHeading ?: 0,
-            sync = syncStatus,
-            unsynced = unsyncedCount,
-            focusLock = frame?.focus?.lock,
-            focusRevealed = frame?.focus?.revealed ?: false,
-            sensorOk = orientation.isAvailable,
-            turnDeg = tutorialView?.turnDeg,
-            homeLines = if (inHome) homeStatusLines(frame?.views?.size ?: 0) else null,
-        )
-        return frame?.views ?: emptyList()
-    }
-
-    /** GL thread: feeds the tutorial with this frame's measurements and hands its view to the UI thread. */
-    private fun updateTutorial(
-        dtS: Float,
-        fix: LocationTracker.Fix?,
-        frame: WorldTracker.Frame?,
-        forward: FloatArray,
-        top: FloatArray,
-    ): Tutorial.View {
-        val nodeId = tutorial.tutorialNodeId
-        val nodeView = frame?.views?.firstOrNull { it.node.id == nodeId }
-        val node = nodeId?.let { id -> nodes.firstOrNull { it.id == id } }
-
-        val distance = if (node != null && fix != null) Geo.distanceM(fix.lat, fix.lon, node.lat, node.lon) else null
-        val turn = nodeView?.let {
-            val facing = WorldTracker.sensorAzimuthDeg(WorldTracker.horizontalForward(forward, top))
-            val target = WorldTracker.sensorAzimuthDeg(it.pos)
-            Geo.wrap180(target - facing)
-        }
-
-        val view = tutorial.update(
-            dtS.toDouble(),
-            Tutorial.Snapshot(
-                hasFix = fix != null,
-                accuracyM = fix?.accuracyM ?: 99.0,
-                speedMps = fix?.speedMps ?: 0.0,
-                headingReady = headingOffsetDeg != null,
-                headingConfidence = headingConfidence.toDouble(),
-                tutorialNodeStage = nodeView?.stage,
-                tutorialNodeDistanceM = distance,
-                tutorialNodeTurnDeg = turn,
-            ),
-        )
-        if (tutorial.consumeCompletion()) SensoryFeedback.emit(SensoryFeedback.Cue.STEP_DONE)
-        // The turn angle changes every frame but is drawn by the HUD, not the card:
-        // compare without it so the UI thread only gets real changes.
-        val cardView = view.copy(turnDeg = null)
-        if (cardView != lastTutorialView) {
-            lastTutorialView = cardView
-            main.post { applyTutorialView(cardView) }
-        }
-        return view
-    }
-
-    /** Main thread. */
-    private fun applyTutorialView(view: Tutorial.View) {
-        if (!tutorialVisible || homeMode) return
-        tutorialOverlay.visibility = View.VISIBLE
-        tutorialOverlay.show(view)
-        if (view.highlightPlace != lastPlaceHighlight) {
-            lastPlaceHighlight = view.highlightPlace
-            placeButton.text = if (view.highlightPlace) "▶ + HINTERLASSEN ◀" else "+ HINTERLASSEN"
-        }
-    }
-
-    private fun onTutorialPrimary() {
-        if (tutorial.step == Tutorial.Step.DONE) closeTutorial() else tutorial.onPrimary()
-    }
-
-    private fun onTutorialSecondary() {
-        if (tutorial.onSecondary()) {
-            settings.cameraRotationSteps = settings.cameraRotationSteps + 1
-            renderer.cameraRotationSteps = settings.cameraRotationSteps
-        }
-    }
-
-    private fun closeTutorial() {
-        tutorial.finish()
-        tutorialVisible = false
-        settings.tutorialDone = true
-        lastTutorialView = null
-        tutorialOverlay.visibility = View.GONE
-        lastPlaceHighlight = false
-        updateHomeUi()
-    }
-
-    private fun startTutorial() {
-        hideCard()
-        tutorial.restart()
-        lastTutorialView = null
-        tutorialVisible = true
-        tutorialOverlay.visibility = View.VISIBLE
-    }
-
-    /** Main thread: every GPS fix may teach the heading estimator where north is. */
-    private fun onGpsFix(fix: LocationTracker.Fix) {
-        val course = fix.courseDeg
-        val azimuth = lastSensorAzimuthDeg
-        if (course != null && azimuth != null) {
-            heading.addSample(course, azimuth, fix.speedMps, fix.courseAccuracyDeg)
-            headingOffsetDeg = if (heading.isReady) heading.offsetDeg else null
-            headingConfidence = heading.confidence.toFloat()
-        }
-    }
-
-    // ----------------------------------------------------------------- nodes
-
-    private fun reloadNodes() {
-        val all = store.all()
-        nodes = all
-        unsyncedCount = all.count { !it.synced }
-    }
-
-    private fun askForText() {
-        val fix = location.fix?.takeIf { it.isFresh() }
-        if (fix == null) {
-            SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
-            toast("Kein Signal. Ohne Position kann nichts hinterlassen werden.")
-            return
-        }
-        val input = EditText(this).apply {
-            hint = "Was bleibt hier?"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            filters = arrayOf(InputFilter.LengthFilter(cfg.textMaxChars))
-            minLines = 3
-            gravity = Gravity.TOP
-        }
-        val pad = dp(20)
-        val box = FrameLayout(this).apply {
-            setPadding(pad, dp(8), pad, 0)
-            addView(input)
-        }
-        val accuracyNote = if (fix.accuracyM > cfg.placeMaxAccuracyM) {
-            "\n\nSignal ungenau (±${fix.accuracyM.toInt()} m). Die Nachricht landet evtl. ein Stück daneben."
-        } else {
-            ""
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Hier hinterlassen")
-            .setMessage("Deine Nachricht bleibt an diesem Ort.$accuracyNote")
-            .setView(box)
-            .setPositiveButton("Ablegen") { _, _ -> placeText(input.text.toString()) }
-            .setNegativeButton("Abbrechen", null)
-            .setOnDismissListener { enterImmersiveMode() }
-            .show()
-    }
-
-    private fun placeText(raw: String) {
-        val textValue = raw.trim()
-        val fix = location.fix?.takeIf { it.isFresh() }
-        if (textValue.isEmpty() || fix == null) {
-            SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
-            if (textValue.isEmpty()) toast("Leere Nachricht.") else toast("Signal verloren. Nichts abgelegt.")
-            return
-        }
-        val id = UUID.randomUUID().toString()
-        store.insertLocal(
-            Node(
-                id = id,
-                lat = fix.lat,
-                lon = fix.lon,
-                contentType = ContentType.TEXT,
-                payload = textValue.take(cfg.textMaxChars),
-                ownerId = null,
-                status = ContentStatus.LIVE,
-                createdAtMs = System.currentTimeMillis(),
-                synced = false,
-            ),
-        )
-        reloadNodes()
-        SensoryFeedback.emit(SensoryFeedback.Cue.NODE_PLACED)
-        if (tutorialVisible) tutorial.onNodePlaced(id)
-        sync.requestSync()
-    }
-
-    // ------------------------------------------------------------------- UI
-
-    private fun buildUi() {
-        val root = FrameLayout(this)
-
-        // Created first: the GL thread writes into it as soon as rendering starts.
-        hud = HudView(this)
-
-        glView = GLSurfaceView(this).apply {
-            setEGLContextClientVersion(2)
-            preserveEGLContextOnPause = true
-            setRenderer(renderer)
-            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
-        }
-        root.addView(glView, matchParent())
-        root.addView(hud, matchParent())
-
-        // Content card: appears when a lock completes, closes on tap.
-        card = TextView(this).apply {
-            typeface = Typeface.MONOSPACE
-            textSize = 15f
-            setTextColor(PHOSPHOR)
-            setLineSpacing(0f, 1.25f)
-            setPadding(dp(18), dp(16), dp(18), dp(18))
-            background = panel()
-            visibility = View.GONE
-            setOnClickListener { onCardTapped() }
-        }
-        root.addView(
-            card,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM)
-                .apply { setMargins(dp(14), 0, dp(14), dp(96)) },
-        )
-
-        tutorialOverlay = TutorialOverlay(
-            this,
-            onPrimary = { onTutorialPrimary() },
-            onSecondary = { onTutorialSecondary() },
-            onSkip = { closeTutorial() },
-        ).apply { visibility = View.GONE }
-        root.addView(
-            tutorialOverlay,
-            // Below the HUD status lines, above the camera centre.
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP)
-                .apply { setMargins(dp(14), dp(128), dp(14), 0) },
-        )
-
-        placeButton = Button(this).apply {
-            text = "+ HINTERLASSEN"
-            styleAsSignalButton(this)
-            setOnClickListener { if (homeMode) onHomeAction() else askForText() }
-        }
-        root.addView(
-            placeButton,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(52), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
-                .apply { bottomMargin = dp(30) },
-        )
-
-        val settingsButton = Button(this).apply {
-            text = "≡"
-            styleAsSignalButton(this)
-            textSize = 20f
-            contentDescription = "Einstellungen"
-            setOnClickListener { showSettings() }
-        }
-        root.addView(
-            settingsButton,
-            FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM or Gravity.END)
-                .apply { setMargins(0, 0, dp(14), dp(30)) },
-        )
-
-        homeButton = Button(this).apply {
-            text = "\u2302"
-            styleAsSignalButton(this)
-            textSize = 20f
-            contentDescription = "Home-Base"
-            setOnClickListener { toggleHome() }
-            setOnLongClickListener {
-                if (homeMode) manageStation()
-                true
-            }
-        }
-        root.addView(
-            homeButton,
-            FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM or Gravity.START)
-                .apply { setMargins(dp(14), 0, 0, dp(30)) },
-        )
-
-        alignButton = Button(this).apply {
-            text = "\u27f2"
-            styleAsSignalButton(this)
-            textSize = 20f
-            contentDescription = "Neu ausrichten"
-            visibility = View.GONE
-            setOnClickListener { alignStation() }
-        }
-        root.addView(
-            alignButton,
-            FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM or Gravity.START)
-                .apply { setMargins(dp(14), 0, 0, dp(92)) },
-        )
-
-        // Full-screen notice while a required permission is missing.
-        blocker = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(0xF0000000.toInt())
-            setPadding(dp(28), dp(28), dp(28), dp(28))
-            visibility = View.GONE
-            isClickable = true // swallow touches meant for the views below
-        }
-        blockerText = TextView(this).apply {
-            typeface = Typeface.MONOSPACE
-            textSize = 15f
-            setTextColor(PHOSPHOR)
-            gravity = Gravity.CENTER
-        }
-        val blockerButton = Button(this).apply {
-            text = "ZUGRIFF ERLAUBEN"
-            styleAsSignalButton(this)
-            setOnClickListener { onBlockerAction() }
-        }
-        blocker.addView(blockerText)
-        blocker.addView(
-            blockerButton,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(52)).apply { topMargin = dp(24) },
-        )
-        root.addView(blocker, matchParent())
-
-        setContentView(root)
-    }
-
-    private fun showCard(node: Node) {
-        val age = DateUtils.getRelativeTimeSpanString(
-            node.createdAtMs, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS,
-        )
-        val isHome = HomePin.isHomeNodeId(node.id)
-        val origin = when {
-            isHome -> "HOME \u00b7 PRIVAT, NUR AUF DIESEM GER\u00c4T"
-            node.synced -> "SERVER"
-            else -> "NUR AUF DIESEM GER\u00c4T"
-        }
-        val action = if (isHome) "[ TIPPEN: SCHLIESSEN ODER L\u00d6SCHEN ]" else "[ TIPPEN ZUM SCHLIESSEN ]"
-        val full = "SIGNAL // TEXT\n\n${node.payload}\n\n$age \u00b7 $origin\n$action"
-        cardNodeId = node.id
-
-        card.visibility = View.VISIBLE
-        cardAnimator?.cancel()
-        // The text arrives character by character, like a transmission coming in.
-        cardAnimator = ValueAnimator.ofInt(0, full.length).apply {
-            duration = (full.length * 9L).coerceIn(250L, 1400L)
-            addUpdateListener { card.text = full.substring(0, it.animatedValue as Int) }
-            start()
-        }
-    }
-
-    /** Id of the node whose card is open. */
-    private var cardNodeId: String? = null
-
-    private fun onCardTapped() {
-        val id = cardNodeId
-        if (id == null || !HomePin.isHomeNodeId(id)) {
-            hideCard()
-            return
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Pin")
-            .setItems(arrayOf("Schlie\u00dfen", "Pin l\u00f6schen")) { _, which ->
-                if (which == 1) {
-                    store.deletePin(HomePin.pinIdOf(id))
-                    reloadHomePins()
-                    SensoryFeedback.emit(SensoryFeedback.Cue.LOCK_LOST)
-                }
-                hideCard()
-            }
-            .setOnDismissListener { enterImmersiveMode() }
-            .show()
-    }
-
-    private fun hideCard() {
-        cardNodeId = null
-        cardAnimator?.cancel()
-        card.visibility = View.GONE
-    }
-
-    private fun showSettings() {
-        val url = EditText(this).apply {
-            hint = "https://dein-server:7350"
-            setText(settings.serverUrl)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            setSingleLine()
-        }
-        val key = EditText(this).apply {
-            hint = "Server-Key"
-            setText(settings.serverKey)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setSingleLine()
-        }
-        val info = TextView(this).apply {
-            val all = store.all()
-            text = "Nodes auf diesem Gerät: ${all.size} (${all.count { !it.synced }} nicht hochgeladen)\n" +
-                "Geräte-ID: ${settings.deviceId.take(8)}…\n" +
-                "Ohne Server-Adresse bleibt alles lokal auf diesem Gerät."
-            setPadding(0, dp(12), 0, 0)
-        }
-        val rotate = Button(this).apply {
-            text = "Kamerabild um 90° drehen"
-            setOnClickListener {
-                settings.cameraRotationSteps = settings.cameraRotationSteps + 1
-                renderer.cameraRotationSteps = settings.cameraRotationSteps
-            }
-        }
-        var dialog: AlertDialog? = null
-        val restartTutorial = Button(this).apply {
-            text = "Tutorial neu starten"
-            setOnClickListener {
-                dialog?.dismiss()
-                startTutorial()
-            }
-        }
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), 0)
-            addView(url)
-            addView(key)
-            addView(info)
-            addView(rotate)
-            addView(restartTutorial)
-        }
-        dialog = AlertDialog.Builder(this)
-            .setTitle("Einstellungen")
-            .setView(box)
-            .setPositiveButton("Speichern") { _, _ ->
-                settings.serverUrl = url.text.toString()
-                settings.serverKey = key.text.toString()
-                sync.requestSync()
-            }
-            .setNegativeButton("Schließen", null)
-            .setOnDismissListener { enterImmersiveMode() }
-            .show()
-    }
-
-    // ------------------------------------------------------------- home base
-
-    private fun toggleHome() {
-        if (homeMode) leaveHome() else pickStation()
-    }
-
-    /** Station list. Choosing one enters home mode; it still needs aligning. */
-    private fun pickStation() {
-        val stations = store.stations()
-        val labels = stations.map { "${it.name}  \u00b7  Bezug: ${it.reference}" } + "+ Neue Station anlegen"
-        AlertDialog.Builder(this)
-            .setTitle("Home-Base: Wo stehst du?")
-            .setItems(labels.toTypedArray()) { _, which ->
-                if (which < stations.size) enterStation(stations[which]) else createStation()
-            }
-            .setNegativeButton("Abbrechen", null)
-            .setOnDismissListener { enterImmersiveMode() }
-            .show()
-    }
-
-    private fun createStation() {
-        val name = EditText(this).apply {
-            hint = "Name, z. B. Couch"
-            setSingleLine()
-            filters = arrayOf(InputFilter.LengthFilter(40))
-        }
-        val reference = EditText(this).apply {
-            hint = "Fester Bezugspunkt, z. B. Lichtschalter"
-            setSingleLine()
-            filters = arrayOf(InputFilter.LengthFilter(60))
-        }
-        val info = TextView(this).apply {
-            text = "Stell dich an die Stelle, von der aus du die Pins sehen willst.\n\n" +
-                "Der Bezugspunkt muss sich nie bewegen und von hier gut sichtbar sein: " +
-                "Lichtschalter, T\u00fcrrahmen-Ecke, Steckdose. Auf ihn zielst du bei jedem Betreten."
-            setPadding(0, 0, 0, dp(8))
-        }
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), 0)
-            addView(info)
-            addView(name)
-            addView(reference)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Neue Station")
-            .setView(box)
-            .setPositiveButton("Anlegen") { _, _ ->
-                val n = name.text.toString().trim()
-                val r = reference.text.toString().trim()
-                if (n.isEmpty() || r.isEmpty()) {
-                    SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
-                    toast("Name und Bezugspunkt angeben.")
-                    return@setPositiveButton
-                }
-                val st = HomeStation(UUID.randomUUID().toString(), n, r, System.currentTimeMillis())
-                store.insertStation(st)
-                enterStation(st)
-            }
-            .setNegativeButton("Abbrechen", null)
-            .setOnDismissListener { enterImmersiveMode() }
-            .show()
-    }
-
-    private fun enterStation(st: HomeStation) {
-        hideCard()
-        homeTracker.leaveStation()
-        station = st
-        reloadHomePins()
-        homeMode = true
-        tutorialOverlay.visibility = View.GONE
-        updateHomeUi()
-    }
-
-    private fun leaveHome() {
-        homeMode = false
-        station = null
-        homePins = emptyList()
-        homeTracker.leaveStation()
-        hideCard()
-        if (tutorialVisible) {
-            lastTutorialView = null // forces the card to be redrawn
-            tutorialOverlay.visibility = View.VISIBLE
-        }
-        updateHomeUi()
-    }
-
-    private fun manageStation() {
-        val st = station ?: return
-        AlertDialog.Builder(this)
-            .setTitle(st.name)
-            .setItems(arrayOf("Station wechseln", "Station mit allen Pins l\u00f6schen")) { _, which ->
-                when (which) {
-                    0 -> pickStation()
-                    1 -> AlertDialog.Builder(this)
-                        .setTitle("\u201e${st.name}\u201c l\u00f6schen?")
-                        .setMessage("Alle ${homePins.size} Pins dieser Station werden endg\u00fcltig gel\u00f6scht.")
-                        .setPositiveButton("L\u00f6schen") { _, _ ->
-                            store.deleteStation(st.id)
-                            leaveHome()
-                        }
-                        .setNegativeButton("Abbrechen", null)
-                        .setOnDismissListener { enterImmersiveMode() }
-                        .show()
-                }
-            }
-            .setOnDismissListener { enterImmersiveMode() }
-            .show()
-    }
-
-    /** Main action button in home mode: choose station, align, or pin. */
-    private fun onHomeAction() {
-        when {
-            station == null -> pickStation()
-            !homeTracker.isAligned -> alignStation()
-            else -> askForPinText()
-        }
-    }
-
-    /** The player aims at the reference mark right now: fix the station's frame. */
-    private fun alignStation() {
-        if (station == null) return
-        val pose = currentPose() ?: return
-        homeTracker.align(pose[0], pose[1])
-        SensoryFeedback.emit(SensoryFeedback.Cue.LOCK_COMPLETE)
-        updateHomeUi()
-    }
-
-    private fun askForPinText() {
-        val st = station ?: return
-        // Capture the aim NOW: while typing, the phone is lowered and points elsewhere.
-        val pose = currentPose()
-        val angles = pose?.let { homeTracker.aimToPinAngles(it[0]) }
-        if (angles == null) {
-            SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
-            return
-        }
-        val input = EditText(this).apply {
-            hint = "Was soll hier h\u00e4ngen?"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-            filters = arrayOf(InputFilter.LengthFilter(cfg.textMaxChars))
-            minLines = 3
-            gravity = Gravity.TOP
-        }
-        val box = FrameLayout(this).apply {
-            setPadding(dp(20), dp(8), dp(20), 0)
-            addView(input)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Anpinnen")
-            .setMessage("Der Pin h\u00e4ngt dort, wohin das Fadenkreuz eben gezeigt hat.")
-            .setView(box)
-            .setPositiveButton("Anpinnen") { _, _ ->
-                val text = input.text.toString().trim()
-                if (text.isEmpty()) {
-                    SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
-                    return@setPositiveButton
-                }
-                val pin = HomePin(
-                    id = UUID.randomUUID().toString(),
-                    stationId = st.id,
-                    relAzimuthDeg = angles[0],
-                    elevationDeg = angles[1],
-                    distanceM = cfg.homePinDistanceM,
-                    text = text.take(cfg.textMaxChars),
-                    createdAtMs = System.currentTimeMillis(),
-                )
-                store.insertPin(pin)
-                homeTracker.suppressLock(pin)
-                reloadHomePins()
-                SensoryFeedback.emit(SensoryFeedback.Cue.NODE_PLACED)
-            }
-            .setNegativeButton("Abbrechen", null)
-            .setOnDismissListener { enterImmersiveMode() }
-            .show()
-    }
-
-    private fun reloadHomePins() {
-        val st = station
-        homePins = if (st == null) emptyList() else store.pins(st.id)
-        updateHomeUi()
-    }
-
-    /** Buttons and labels for the current home state. Main thread. */
-    private fun updateHomeUi() {
-        val inHome = homeMode
-        val aligned = homeTracker.isAligned
-        alignButton.visibility = if (inHome && station != null && aligned) View.VISIBLE else View.GONE
-        homeButton.text = if (inHome) "\u2715" else "\u2302"
-        homeButton.contentDescription = if (inHome) "Home-Base verlassen" else "Home-Base"
-        placeButton.text = when {
-            !inHome -> if (lastPlaceHighlight) "\u25b6 + HINTERLASSEN \u25c0" else "+ HINTERLASSEN"
-            station == null -> "STATION W\u00c4HLEN"
-            !aligned -> "AUSRICHTEN"
-            else -> "+ ANPINNEN"
-        }
-    }
-
-    /** HUD lines in home mode. GL thread: reads only volatile state. */
-    private fun homeStatusLines(visiblePins: Int): List<String> {
-        val st = station ?: return listOf("HOME", "STATION W\u00c4HLEN")
-        val name = st.name.uppercase()
-        return if (!homeTracker.isAligned) {
-            listOf(
-                "HOME \u00b7 $name",
-                "ZIEL AUF: ${st.reference.uppercase()}",
-                "DANN UNTEN AUSRICHTEN TIPPEN",
-            )
-        } else {
-            listOf(
-                "HOME \u00b7 $name \u00b7 AUSGERICHTET",
-                "PINS $visiblePins \u00b7 VOM STANDPUNKT AUS SCHAUEN",
-                "VERSCHOBEN? \u27f2 UND NEU AUF ${st.reference.uppercase()}",
-            )
-        }
-    }
-
-    /** Copy of the latest [forward, top] pose, or null before the first sensor reading. */
-    private fun currentPose(): Array<FloatArray>? = synchronized(poseLock) {
-        if (!hasPose) null else arrayOf(lastForward.copyOf(), lastTop.copyOf())
-    }
-
-    // ----------------------------------------------------------- permissions
-
-    private fun showIntro() {
-        AlertDialog.Builder(this)
-            .setTitle("LOBBYISM")
-            .setMessage(
-                "Diese App legt Inhalte über die echte Welt.\n\n" +
-                    "Dafür braucht sie:\n" +
-                    "• Kamera: zeigt die Umgebung. Das Bild wird nicht gespeichert und nicht übertragen.\n" +
-                    "• Standort: verankert Inhalte an echten Orten. Deine Position wird nur gesendet, " +
-                    "wenn du selbst einen Server einträgst.",
-            )
-            .setCancelable(false)
-            .setPositiveButton("Weiter") { _, _ ->
-                settings.introSeen = true
-                requestMissingPermissions()
-            }
-            .show()
-    }
-
-    private fun requestMissingPermissions() {
-        val missing = REQUIRED_PERMISSIONS.filter { !hasPermission(it) }
-        if (missing.isNotEmpty()) requestPermissions(withCoarse(missing), PERMISSION_REQUEST)
-        updateBlocker()
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != PERMISSION_REQUEST) return
-        if (resumed) {
-            if (hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) location.start()
-            openCameraIfPossible()
-        }
-        updateBlocker()
-    }
-
-    private fun updateBlocker() {
-        val missing = REQUIRED_PERMISSIONS.filter { !hasPermission(it) }
-        if (missing.isEmpty() || !settings.introSeen) {
-            blocker.visibility = View.GONE
-            return
-        }
-        val names = missing.joinToString(" und ") {
-            if (it == Manifest.permission.CAMERA) "Kamera" else "genauen Standort"
-        }
-        blockerText.text = "Ohne $names funktioniert LOBBYISM nicht."
-        blocker.visibility = View.VISIBLE
-    }
-
-    private fun onBlockerAction() {
-        val missing = REQUIRED_PERMISSIONS.filter { !hasPermission(it) }
-        // After "don't ask again" Android no longer shows the dialog: send the player to the app settings instead.
-        val permanentlyDenied = missing.any { !shouldShowRequestPermissionRationale(it) }
-        if (permanentlyDenied) {
-            startActivity(
-                Intent(SystemSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)),
-            )
-        } else {
-            requestPermissions(withCoarse(missing), PERMISSION_REQUEST)
-        }
-    }
-
-    /**
-     * Android 12+ ignores a request for the precise location unless the
-     * approximate one is requested in the same dialog. The app still needs the
-     * precise one: GPS is not available with approximate location only.
-     */
-    private fun withCoarse(missing: List<String>): Array<String> =
-        if (Manifest.permission.ACCESS_FINE_LOCATION in missing) {
-            (missing + Manifest.permission.ACCESS_COARSE_LOCATION).toTypedArray()
-        } else {
-            missing.toTypedArray()
-        }
-
-    private fun hasPermission(permission: String): Boolean =
-        checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
-
-    private fun openCameraIfPossible() {
-        val texture = cameraTexture ?: return
-        if (!resumed || !hasPermission(Manifest.permission.CAMERA)) return
-        camera.open(texture) { message -> main.post { toast(message) } }
-    }
-
-    // --------------------------------------------------------------- helpers
-
-    private fun styleAsSignalButton(b: Button) {
-        b.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-        b.setTextColor(PHOSPHOR)
-        b.textSize = 14f
-        b.letterSpacing = 0.08f
-        b.isAllCaps = false
-        b.background = panel()
-        b.setPadding(dp(18), 0, dp(18), 0)
-        b.minWidth = 0
-        b.minimumWidth = 0
-        b.stateListAnimator = null
-    }
-
-    /** Dark, slightly see-through panel with a thin phosphor outline. */
-    private fun panel() = GradientDrawable().apply {
-        setColor(0xD9050A08.toInt())
-        setStroke(dp(1), 0xB3CDFFDB.toInt())
-        cornerRadius = 0f
-    }
-
-    private fun matchParent() =
-        FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
-
-    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    private fun dp(v: Int) = Theme.dp(this, v)
 
     private companion object {
-        const val PERMISSION_REQUEST = 1
-        const val PHOSPHOR = 0xFFCDFFDB.toInt()
-        val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION)
+        const val CARD_BOTTOM_DP = 96
+        const val TUTORIAL_TOP_DP = 128
     }
 }

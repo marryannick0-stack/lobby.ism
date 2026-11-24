@@ -10,7 +10,8 @@ Ortsbasierte AR-Plattform. Inhalte werden an echten Orten hinterlassen und durch
 |---|---|
 | `android/` | Die App. Kotlin, eigene Render-Runtime auf OpenGL ES 2.0, keine Bibliotheken. |
 | `server/` | Nakama-Modul (TypeScript) und Docker-Setup mit PostGIS. |
-| `docs/` | Decision Logs. `DecisionLog_NativeRuntime_v1.md` erklärt die Architektur. |
+| `docs/` | Decision Logs und `ARCHITECTURE.md` (welches Feld in welcher Datei liegt). |
+| `CLAUDE.md`, `.claude/rules/` | Arbeitsanweisungen für Claude Code: Befehle, Aufbau, Regeln. |
 | `.github/workflows/` | Baut bei jedem Push automatisch die Test-App. |
 
 ## App aufs Handy
@@ -49,7 +50,10 @@ Voraussetzungen: JDK 17, Android SDK (Plattform 35), Gradle 8.10.
 
 ```
 cd android
-gradle testDebugUnitTest assembleDebug
+gradle testDebugUnitTest lintDebug assembleDebug
+
+cd ../server
+npm ci && npm run build && npm test
 ```
 
 ## Lizenz

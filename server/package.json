@@ -5,7 +5,8 @@
   "description": "LOBBYISM server module for Nakama (TypeScript)",
   "scripts": {
     "build": "tsc",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.js"
   },
   "devDependencies": {
     "nakama-runtime": "github:heroiclabs/nakama-common#v1.36.0",

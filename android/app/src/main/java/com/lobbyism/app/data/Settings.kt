@@ -1,4 +1,4 @@
-package com.lobbyism.app.net
+package com.lobbyism.app.data
 
 import android.content.Context
 import java.util.UUID
