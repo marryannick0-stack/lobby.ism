@@ -70,6 +70,7 @@ Backups: `allowBackup=false` plus `res/xml/data_extraction_rules.xml` (Android 1
 | LockedOrientationActivity, DiscouragedApi | AR view is portrait by design | tablet support |
 | UnnecessaryRequiredFeature (GPS) | Outdoor play needs GPS; the home base alone would not | a home-only mode |
 | OldTargetApi | targetSdk 35 needs AGP upgrade for 36 | before any store release |
+| ChromeOsAbiSupport | Native code is built for phone CPUs only (arm64-v8a, armeabi-v7a) | ChromeOS or emulator support |
 
 ## Deliberate deviations from the Android guide
 
