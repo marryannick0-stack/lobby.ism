@@ -49,11 +49,11 @@ jobs:
           print(f"LINT: {len(issues)} findings")
           for (sev, rule), n in count.most_common():
               print(f"  {n:3d}  {sev:12s} {rule}")
+          print("Details:")
           for i in issues:
-              if i.get("severity") in ("Error", "Fatal"):
-                  loc = i.find("location")
-                  where = f"{loc.get('file').split('/app/')[-1]}:{loc.get('line')}" if loc is not None else ""
-                  print(f"  ERROR {i.get('id')} {where}: {i.get('message')}")
+              loc = i.find("location")
+              where = f"{loc.get('file').split('/app/')[-1]}:{loc.get('line')}" if loc is not None else ""
+              print(f"  [{i.get('severity')}] {i.get('id')} {where}: {i.get('message')[:220]}")
           PY
 
       # Reports stay available for every run, also when a step above failed.
