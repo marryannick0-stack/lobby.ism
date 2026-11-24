@@ -74,6 +74,21 @@ data class Config(
     /** Stash capacity (Loot System v2.0: 20 at start). */
     val stashSlots: Int = 20,
 
+    // --- Room markers (AprilTag tag36h11) ---
+    /** Edge of the printed black square, metres. The player can correct it in the settings. */
+    val markerSizeM: Double = 0.16,
+    /** Width of the grey analysis stream; 4:3 sizes closest to this are used. */
+    val markerAnalysisWidth: Int = 1280,
+    /** Detector downscaling for finding the square; 2 = fast, 1 = finds smaller markers. */
+    val markerDecimate: Double = 2.0,
+    val markerThreads: Int = 2,
+    /** Analysed frames per second at most (CPU and battery budget). */
+    val markerMaxFps: Int = 12,
+    /** Detections below this decision margin are discarded as likely false. */
+    val markerMinMargin: Double = 40.0,
+    /** A sighting older than this is treated as "marker not in view". */
+    val markerStaleMs: Long = 600,
+
     // --- Tutorial ---
     val tutorial: TutorialConfig = TutorialConfig(),
 )

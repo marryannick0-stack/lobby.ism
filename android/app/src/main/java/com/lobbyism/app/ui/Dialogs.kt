@@ -55,6 +55,7 @@ class Dialogs(private val activity: Activity, private val onClosed: () -> Unit) 
      * [onConfirm] receives the trimmed values in the order of [fields].
      */
     fun fields(
+        onCancel: (() -> Unit)? = null,
         title: String,
         info: String?,
         fields: List<Field>,
@@ -78,14 +79,27 @@ class Dialogs(private val activity: Activity, private val onClosed: () -> Unit) 
             )
         }
         views.addAll(inputs)
-        form(title, views, confirm, "Abbrechen") { onConfirm(inputs.map { it.text.toString().trim() }) }
+        form(title, views, confirm, "Abbrechen", onCancel) { onConfirm(inputs.map { it.text.toString().trim() }) }
     }
 
-    /** A list of choices. */
-    fun choose(title: String, items: List<String>, cancelable: Boolean = true, onChoice: (Int) -> Unit) {
+    /**
+     * A list of choices. [onCancel] runs when the dialog is left without a choice
+     * (cancel button, back key or a tap outside).
+     */
+    fun choose(
+        title: String,
+        items: List<String>,
+        cancelable: Boolean = true,
+        onCancel: (() -> Unit)? = null,
+        onChoice: (Int) -> Unit,
+    ) {
         builder(title)
             .setItems(items.toTypedArray()) { _, which -> onChoice(which) }
-            .apply { if (cancelable) setNegativeButton("Abbrechen", null) }
+            .apply {
+                if (cancelable) setNegativeButton("Abbrechen") { _, _ -> onCancel?.invoke() }
+                setCancelable(cancelable)
+                if (onCancel != null) setOnCancelListener { onCancel() }
+            }
             .show()
     }
 
@@ -104,6 +118,7 @@ class Dialogs(private val activity: Activity, private val onClosed: () -> Unit) 
         views: List<View>,
         confirm: String?,
         dismiss: String,
+        onCancel: (() -> Unit)? = null,
         onConfirm: () -> Unit = {},
     ): AlertDialog {
         val box = LinearLayout(activity).apply {
@@ -114,7 +129,8 @@ class Dialogs(private val activity: Activity, private val onClosed: () -> Unit) 
         return builder(title)
             .setView(box)
             .apply { if (confirm != null) setPositiveButton(confirm) { _, _ -> onConfirm() } }
-            .setNegativeButton(dismiss, null)
+            .setNegativeButton(dismiss) { _, _ -> onCancel?.invoke() }
+            .apply { if (onCancel != null) setOnCancelListener { onCancel() } }
             .show()
     }
 

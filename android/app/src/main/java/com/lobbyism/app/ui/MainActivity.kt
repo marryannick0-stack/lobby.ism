@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import com.lobbyism.app.camera.CameraFeed
+import com.lobbyism.app.camera.MarkerTracker
 import com.lobbyism.app.core.Config
 import com.lobbyism.app.data.ConfigLoader
 import com.lobbyism.app.data.HomeRepository
@@ -26,13 +27,16 @@ import com.lobbyism.app.render.ArRenderer
 import com.lobbyism.app.sensors.LocationTracker
 import com.lobbyism.app.sensors.OrientationTracker
 import com.lobbyism.app.ui.home.HomeController
+import com.lobbyism.app.ui.outdoor.OutdoorController
 import com.lobbyism.app.ui.theme.Theme
 import com.lobbyism.app.ui.tutorial.TutorialController
 
 /**
  * The app's single screen. Composition root and lifecycle owner only:
- * it builds every part, wires them together and starts/stops them with the
- * activity. No game logic lives here.
+ * it builds every part, wires them together, switches modes and starts/stops
+ * hardware with the activity. No game logic lives here.
+ *
+ * Modes: MENU (start screen, camera and GPS off), OUTDOOR, HOME.
  *
  * Where things live:
  *   core/      pure logic, unit-tested       data/   repositories, storage, settings
@@ -42,12 +46,15 @@ import com.lobbyism.app.ui.tutorial.TutorialController
  */
 class MainActivity : Activity() {
 
+    private enum class Mode { MENU, OUTDOOR, HOME }
+
     private lateinit var cfg: Config
     private lateinit var settings: Settings
     private lateinit var store: NodeStore
     private lateinit var orientation: OrientationTracker
     private lateinit var location: LocationTracker
     private lateinit var camera: CameraFeed
+    private lateinit var markers: MarkerTracker
     private lateinit var nodes: NodeRepository
     private lateinit var renderer: ArRenderer
     private lateinit var haptics: Haptics
@@ -57,14 +64,19 @@ class MainActivity : Activity() {
     private lateinit var permissions: PermissionGate
     private lateinit var home: HomeController
     private lateinit var tutorial: TutorialController
+    private lateinit var outdoor: OutdoorController
     private lateinit var loop: GameLoop
     private lateinit var buttons: ActionButtons
     private lateinit var card: ContentCard
+    private lateinit var startScreen: StartScreen
     private lateinit var glView: GLSurfaceView
 
     private val main = Handler(Looper.getMainLooper())
     private val pose = PoseCache()
     private var resumed = false
+    private var mode = Mode.MENU
+    /** GLSurfaceView has no "is paused" getter; tracked here so pause/resume stay balanced. */
+    private var glRunning = true
     @Volatile private var cameraTexture: SurfaceTexture? = null
 
     // ------------------------------------------------------------ lifecycle
@@ -90,19 +102,23 @@ class MainActivity : Activity() {
 
         // --- sensors, camera, feedback ---
         orientation = OrientationTracker(this)
-        camera = CameraFeed(this)
+        camera = CameraFeed(this, cfg.markerAnalysisWidth)
+        markers = MarkerTracker(cfg, camera, orientation).apply {
+            settings.markerSizeCm.takeIf { it > 0f }?.let { markerSizeM = it / 100.0 }
+        }
         haptics = Haptics(this)
         audio = SignalAudio()
 
         // --- UI state holders ---
         dialogs = Dialogs(this) { enterImmersiveMode() }
-        permissions = PermissionGate(this, settings, dialogs) { if (resumed) startPermissionGated() }
+        permissions = PermissionGate(this, settings, dialogs) { if (resumed && mode != Mode.MENU) startPermissionGated() }
         home = HomeController(cfg, HomeRepository(cfg, store), pose, dialogs) { onHomeChanged() }
         tutorial = TutorialController(this, cfg.tutorial, settings, onRotateCamera = { rotateCamera() }) { renderButtons() }
+        outdoor = OutdoorController(cfg, nodes, location, dialogs) { id -> tutorial.onNodePlaced(id) }
 
         // --- engine ---
         val hud = HudView(this) // created before rendering starts: the GL thread writes into it
-        loop = GameLoop(cfg, orientation, location, nodes, home, tutorial, pose, hud) { node -> card.show(node) }
+        loop = GameLoop(cfg, orientation, location, nodes, home, tutorial, pose, markers, hud) { node -> card.show(node) }
         renderer = ArRenderer(cfg, orientation, camera.previewSize, camera.fovLongSideRad, loop) { texture ->
             // GL thread: a (new) camera texture exists. Open the camera from the main thread.
             cameraTexture = texture
@@ -117,6 +133,7 @@ class MainActivity : Activity() {
         SensoryFeedback.addListener(audio)
         SensoryFeedback.addListener(renderer)
 
+        showMenu()
         permissions.begin()
     }
 
@@ -124,8 +141,7 @@ class MainActivity : Activity() {
         super.onResume()
         resumed = true
         enterImmersiveMode()
-        glView.onResume()
-        startSensorsAndCamera()
+        if (mode != Mode.MENU) startWorld()
         nodes.startSync()
         permissions.refresh()
     }
@@ -133,10 +149,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         resumed = false
         nodes.stopSync()
-        camera.close()
-        location.stop()
-        orientation.stop()
-        glView.onPause()
+        if (mode != Mode.MENU) stopWorld()
         super.onPause()
     }
 
@@ -145,6 +158,7 @@ class MainActivity : Activity() {
         SensoryFeedback.removeListener(audio)
         SensoryFeedback.removeListener(renderer)
         card.close()
+        markers.release()
         audio.release()
         store.close()
         super.onDestroy()
@@ -160,9 +174,71 @@ class MainActivity : Activity() {
         this.permissions.onResult(requestCode)
     }
 
+    @Deprecated("Deprecated in Android 13; still the hook for API 26-32")
+    override fun onBackPressed() {
+        // Back from a mode returns to the start screen; on the start screen it closes the app.
+        if (mode != Mode.MENU) showMenu() else @Suppress("DEPRECATION") super.onBackPressed()
+    }
+
+    // ----------------------------------------------------------------- modes
+
+    private fun showMenu() {
+        val wasActive = mode != Mode.MENU
+        mode = Mode.MENU
+        card.close()
+        home.exit()
+        tutorial.setSuspended(true)
+        // The renderer runs from the moment the view is attached; on the menu nothing needs it.
+        if (wasActive && resumed) stopWorld() else pauseRendering()
+        startScreen.render(settings.tutorialDone, buildLabel())
+        startScreen.visibility = View.VISIBLE
+    }
+
+    private fun startOutdoor(withTutorial: Boolean) {
+        enterMode(Mode.OUTDOOR)
+        if (withTutorial) tutorial.start() else tutorial.setSuspended(false)
+    }
+
+    private fun startHome() {
+        enterMode(Mode.HOME)
+        home.enterFromMenu(onCancel = ::showMenu)
+    }
+
+    private fun enterMode(next: Mode) {
+        mode = next
+        startScreen.visibility = View.GONE
+        if (resumed) startWorld()
+        renderButtons()
+    }
+
+    /** Camera, sensors and rendering on. GPS only outdoors: the home base does not need a position. */
+    private fun startWorld() {
+        if (!glRunning) {
+            glView.onResume()
+            glRunning = true
+        }
+        orientation.start()
+        startPermissionGated()
+    }
+
+    private fun stopWorld() {
+        camera.close()
+        markers.stop() // after the camera: its session used the marker surface
+        location.stop()
+        orientation.stop()
+        pauseRendering()
+    }
+
+    private fun pauseRendering() {
+        if (glRunning) {
+            glView.onPause()
+            glRunning = false
+        }
+    }
+
     // ---------------------------------------------------------------- screen
 
-    /** Layers from back to front: camera + world, HUD, cards, buttons, permission notice. */
+    /** Layers from back to front: camera + world, HUD, cards, buttons, start screen, permission notice. */
     private fun buildScreen(hud: HudView) {
         val root = FrameLayout(this)
 
@@ -195,85 +271,67 @@ class MainActivity : Activity() {
 
         buttons = ActionButtons(
             this,
-            onMain = { if (home.isActive) home.onMainAction() else askForText() },
-            onHome = { home.toggle() },
-            onHomeLong = { if (home.isActive) home.manage() },
+            onMain = { if (mode == Mode.HOME) home.onMainAction() else outdoor.askForText() },
+            onMenu = ::showMenu,
+            onMenuLong = { if (mode == Mode.HOME) home.manage() },
             onSecondary = { home.onSecondaryAction() },
-            onSettings = {
-                SettingsDialog(this, settings, nodes, dialogs, ::rotateCamera) {
-                    card.close()
-                    tutorial.start()
-                }.show()
-            },
+            onSettings = ::showSettings,
         )
         buttons.addTo(root)
         renderButtons()
 
+        startScreen = StartScreen(
+            this,
+            onOutdoor = { startOutdoor(withTutorial = false) },
+            onHome = ::startHome,
+            onTutorial = { startOutdoor(withTutorial = true) },
+            onSettings = ::showSettings,
+        )
+        root.addView(startScreen, Theme.matchParent())
+
         root.addView(permissions.blocker, Theme.matchParent())
         setContentView(root)
+    }
+
+    private fun showSettings() {
+        SettingsDialog(
+            this, settings, nodes, dialogs, ::rotateCamera,
+            onRestartTutorial = {
+                card.close()
+                startOutdoor(withTutorial = true)
+            },
+            defaultMarkerCm = cfg.markerSizeM * 100.0,
+            onMarkerSize = { cm -> markers.markerSizeM = cm / 100.0 },
+        ).show()
     }
 
     private fun renderButtons() = buttons.render(home.ui, tutorial.highlightPlace)
 
     private fun onHomeChanged() {
         card.close()
-        tutorial.setSuspended(home.isActive)
         renderButtons()
     }
 
-    // ----------------------------------------------------------------- nodes
-
-    private fun askForText() {
-        val fix = location.fix?.takeIf { it.isFresh() }
-        if (fix == null) {
-            SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
-            dialogs.toast("Kein Signal. Ohne Position kann nichts hinterlassen werden.")
-            return
-        }
-        val accuracyNote = if (fix.accuracyM > cfg.placeMaxAccuracyM) {
-            "\n\nSignal ungenau (±${fix.accuracyM.toInt()} m). Die Nachricht landet evtl. ein Stück daneben."
-        } else {
-            ""
-        }
-        dialogs.textInput(
-            title = "Hier hinterlassen",
-            message = "Deine Nachricht bleibt an diesem Ort.$accuracyNote",
-            hint = "Was bleibt hier?",
-            maxChars = cfg.textMaxChars,
-            confirm = "Ablegen",
-        ) { text -> placeText(text) }
-    }
-
-    private fun placeText(text: String) {
-        // Position at the moment of confirming, not of opening the dialog: the player may have walked on.
-        val fix = location.fix?.takeIf { it.isFresh() }
-        if (text.isEmpty() || fix == null) {
-            SensoryFeedback.emit(SensoryFeedback.Cue.DENIED)
-            dialogs.toast(if (text.isEmpty()) "Leere Nachricht." else "Signal verloren. Nichts abgelegt.")
-            return
-        }
-        val node = nodes.placeText(text, fix.lat, fix.lon)
-        SensoryFeedback.emit(SensoryFeedback.Cue.NODE_PLACED)
-        tutorial.onNodePlaced(node.id)
+    private fun buildLabel(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    } catch (e: Exception) {
+        "?"
     }
 
     // ------------------------------------------------------ hardware control
 
-    private fun startSensorsAndCamera() {
-        orientation.start()
-        startPermissionGated()
-    }
-
     /** GPS and camera need runtime permissions; safe to call again after they were granted. */
     private fun startPermissionGated() {
-        if (permissions.hasLocation) location.start()
+        if (mode == Mode.OUTDOOR && permissions.hasLocation) location.start() else location.stop()
         openCameraIfPossible()
     }
 
     private fun openCameraIfPossible() {
         val texture = cameraTexture ?: return
-        if (!resumed || !permissions.hasCamera) return
-        camera.open(texture) { message -> main.post { dialogs.toast(message) } }
+        if (!resumed || mode == Mode.MENU || !permissions.hasCamera) return
+        // Home base: a second grey stream feeds the room-marker detector.
+        val analysis = if (mode == Mode.HOME) markers.start() else null
+        camera.open(texture, analysis) { message -> main.post { dialogs.toast(message) } }
     }
 
     private fun rotateCamera() {

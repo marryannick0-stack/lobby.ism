@@ -25,13 +25,14 @@ android/app/src/main/java/com/lobbyism/app/
   data/      Repositories (single source of truth), SQLite store, config loader, settings.
   net/       Nakama REST client and sync. Only NodeRepository uses it.
   sensors/   Gyro orientation, GPS.
-  camera/    Camera2 feed into an OpenGL texture.
+  camera/    Camera2 feed into an OpenGL texture; grey analysis stream + marker tracker.
   render/    The micro engine: GL renderer, shaders, point-cloud geometry.
   feedback/  SensoryFeedback dispatcher, haptics, synthesised sound.
   ui/        MainActivity (composition root), GameLoop, state holders per feature, views.
     theme/   Colours, type, panels, buttons. Every look change starts here.
     home/    Home base state holder.
     tutorial/ Tutorial state holder and card.
+android/app/src/main/cpp/                 Native marker detector: vendored AprilTag (BSD-2) + JNI bridge.
 android/app/src/main/assets/config.json   Every tunable value.
 server/      Nakama module (TypeScript) + docker-compose with PostGIS.
 docs/        Decision logs and ARCHITECTURE.md (feature map, data flow).
@@ -48,6 +49,8 @@ Feature → files map: @docs/ARCHITECTURE.md
 - `MainActivity` only builds and wires parts. No feature logic there. Keep it under ~300 lines.
 - Threads: `GameLoop.frame` runs on the GL thread every frame. It may only read `@Volatile` snapshots and must not allocate per frame. Views are touched on the main thread only (post via `Handler`).
 - No library dependencies in the app (only Android framework + Kotlin stdlib). Adding one needs a decision log entry.
+  The one exception so far: AprilTag, vendored as source (decision N9).
+- Camera and GPS run only inside a mode (OUTDOOR, HOME). The start screen keeps them off.
 
 ## Project rules (non-negotiable, from the design docs)
 
@@ -68,7 +71,8 @@ Feature → files map: @docs/ARCHITECTURE.md
 
 ## Known limits (do not "fix" without a decision)
 
-- Tracking is 3DoF + GPS. Home objects are correct only from their station's spot. 6DoF = stage 2 (OpenVINS), not started.
+- Tracking is 3DoF + GPS. Home objects are correct only from their station's spot. Room markers (AprilTag) are detected
+  and drawn, but do not drive the camera position yet (stage 2 of the marker plan, decision N9).
 - Gear is local PROTOTYPE stock (labelled). Real gear must come from the server (R4) once loot exists; `gear_item` already mirrors that model.
 - Armour stands stand on a virtual floor `cameraHeightM` below the phone. Sitting or a different holding height shifts them.
 - Gyro yaw resets on every app start; north is relearned by walking, home stations by aligning.

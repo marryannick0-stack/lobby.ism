@@ -2,6 +2,7 @@ package com.lobbyism.app.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -13,16 +14,19 @@ import android.os.HandlerThread
 import android.util.Log
 import android.util.Size
 import android.view.Surface
+import com.lobbyism.app.core.CameraGeometry
 import kotlin.math.abs
 import kotlin.math.atan
 
 /**
  * Live image of the back camera, delivered into an OpenGL texture.
  *
- * Uses Camera2, the camera API that is part of open-source Android. The frames
- * never leave the GPU: they are not stored, not analysed and not sent anywhere.
+ * Uses Camera2, the camera API that is part of open-source Android. The preview
+ * frames never leave the GPU. Optionally a second, grey stream feeds the marker
+ * detector (home base); those frames are analysed in memory and released at once.
+ * Nothing is stored or sent anywhere.
  */
-class CameraFeed(context: Context) {
+class CameraFeed(context: Context, analysisTargetWidth: Int) {
     private val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
 
     private var thread: HandlerThread? = null
@@ -33,6 +37,9 @@ class CameraFeed(context: Context) {
 
     /** The texture currently being streamed into; null while closed. */
     private var activeTexture: SurfaceTexture? = null
+
+    /** The second (analysis) target of the open session, if any. */
+    private var activeAnalysis: Surface? = null
 
     /**
      * Counts open/close cycles. Camera callbacks arrive later on another thread;
@@ -49,9 +56,21 @@ class CameraFeed(context: Context) {
     /** Field of view along the LONG side of the camera frame, in radians. */
     val fovLongSideRad: Float
 
+    /** Size of the grey analysis stream (4:3 to use the whole sensor), or null if unsupported. */
+    val analysisSize: Size?
+
+    /** Pinhole intrinsics of the analysis stream, for marker pose estimation. */
+    val analysisIntrinsics: CameraGeometry.Intrinsics?
+
+    /** SENSOR_ORIENTATION of the back camera, degrees clockwise. */
+    val sensorOrientationDeg: Int
+
     init {
         var size = Size(1280, 720)
         var fov = Math.toRadians(66.0).toFloat()
+        var analysis: Size? = null
+        var intrinsics: CameraGeometry.Intrinsics? = null
+        var orientation = 90
         try {
             val id = cameraId
             if (id != null) {
@@ -69,25 +88,44 @@ class CameraFeed(context: Context) {
                     // Guard against nonsense values reported by some devices.
                     if (f > Math.toRadians(30.0) && f < Math.toRadians(120.0)) fov = f
                 }
+
+                orientation = ch.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+                val yuv = map?.getOutputSizes(ImageFormat.YUV_420_888)
+                if (yuv != null && yuv.isNotEmpty()) analysis = chooseAnalysisSize(yuv, analysisTargetWidth)
+                val a = analysis
+                // Calibration is given in pre-correction active array pixels (API 28+).
+                val array = ch.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+                    ?: ch.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                if (a != null && array != null && sensor != null && focal != null && focal.isNotEmpty()) {
+                    intrinsics = CameraGeometry.intrinsics(
+                        a.width, a.height, array.width(), array.height(),
+                        ch.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION),
+                        focal[0], sensor.width,
+                    )
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "could not read camera characteristics", e)
         }
         previewSize = size
         fovLongSideRad = fov
+        analysisSize = if (intrinsics != null) analysis else null
+        analysisIntrinsics = intrinsics
+        sensorOrientationDeg = orientation
     }
 
     /**
-     * Starts streaming into [texture]. Caller must hold the CAMERA permission.
-     * Safe to call repeatedly: a second call with the same texture does nothing,
-     * a call with a new texture closes the old stream first.
+     * Starts streaming into [texture], and into [analysis] too if given.
+     * Caller must hold the CAMERA permission. Safe to call repeatedly: the same
+     * targets again do nothing, different targets close the old stream first.
      */
     @SuppressLint("MissingPermission")
-    fun open(texture: SurfaceTexture, fail: (String) -> Unit) {
-        if (activeTexture === texture) return
+    fun open(texture: SurfaceTexture, analysis: Surface?, fail: (String) -> Unit) {
+        if (activeTexture === texture && activeAnalysis === analysis) return
         close()
         val id = cameraId ?: return fail("Keine Rückkamera gefunden")
         activeTexture = texture
+        activeAnalysis = analysis
         val gen = ++generation
 
         val t = HandlerThread("lobbyism-camera").also { it.start() }
@@ -107,7 +145,7 @@ class CameraFeed(context: Context) {
                         return
                     }
                     device = camera
-                    startPreview(camera, target, h, fail)
+                    startPreview(camera, target, analysis, h, fail)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
@@ -131,13 +169,14 @@ class CameraFeed(context: Context) {
     }
 
     @Suppress("DEPRECATION") // The list-based createCaptureSession is the variant available on API 26.
-    private fun startPreview(camera: CameraDevice, target: Surface, h: Handler, fail: (String) -> Unit) {
+    private fun startPreview(camera: CameraDevice, target: Surface, analysis: Surface?, h: Handler, fail: (String) -> Unit) {
         try {
             val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(target)
+                if (analysis != null) addTarget(analysis)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             }
-            camera.createCaptureSession(listOf(target), object : CameraCaptureSession.StateCallback() {
+            camera.createCaptureSession(listOfNotNull(target, analysis), object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
                     if (device !== camera) return
                     session = s
@@ -160,6 +199,7 @@ class CameraFeed(context: Context) {
     fun close() {
         generation++
         activeTexture = null
+        activeAnalysis = null
         try {
             session?.close()
         } catch (e: Exception) {
@@ -194,6 +234,17 @@ class CameraFeed(context: Context) {
                 aspectPenalty + abs(it.width - 1280)
             } ?: sizes[0]
     }
+
+    /**
+     * 4:3 like the sensor (no crop, full field of view), as close as possible to
+     * the target width. Preview + YUV at preview size is a combination every
+     * Camera2 device supports.
+     */
+    private fun chooseAnalysisSize(sizes: Array<Size>, targetWidth: Int): Size =
+        sizes.minByOrNull {
+            val aspectPenalty = abs(it.width.toFloat() / it.height - 4f / 3f) * 10_000f
+            aspectPenalty + abs(it.width - targetWidth)
+        } ?: sizes[0]
 
     private companion object {
         const val TAG = "LOBBYISM/Camera"

@@ -107,4 +107,42 @@ object NodeGeometry {
         }
         return out
     }
+
+    /**
+     * Room marker frame, unit size, in the marker's own plane (z = 0, z points into the wall):
+     * a precise outline, inner corner brackets, a centre cross and a faint echo of the
+     * outline standing off the wall. Reads as "the system has locked onto this".
+     */
+    fun markerFrame(seed: Int = 17): FloatArray {
+        val rnd = Random(seed)
+        val out = ArrayList<Float>(1200 * FLOATS_PER_VERTEX)
+        fun add(x: Float, y: Float, z: Float) {
+            out.add(x); out.add(y); out.add(z); out.add(rnd.nextFloat() * 100f)
+        }
+        fun line(n: Int, x0: Float, y0: Float, x1: Float, y1: Float, z: Float) {
+            repeat(n) {
+                val t = rnd.nextFloat()
+                add(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, z)
+            }
+        }
+        val h = 0.5f
+        // Outline exactly on the black square's edge.
+        line(110, -h, -h, h, -h, 0f); line(110, h, -h, h, h, 0f)
+        line(110, h, h, -h, h, 0f); line(110, -h, h, -h, -h, 0f)
+        // Echo standing 4 cm (relative) off the wall, slightly larger.
+        val e = 0.58f
+        line(50, -e, -e, e, -e, -0.08f); line(50, e, -e, e, e, -0.08f)
+        line(50, e, e, -e, e, -0.08f); line(50, -e, e, -e, -e, -0.08f)
+        // Inner corner brackets.
+        val b = 0.32f
+        val arm = 0.12f
+        for (sx in floatArrayOf(-1f, 1f)) for (sy in floatArrayOf(-1f, 1f)) {
+            line(30, sx * b, sy * b, sx * (b - arm), sy * b, 0f)
+            line(30, sx * b, sy * b, sx * b, sy * (b - arm), 0f)
+        }
+        // Centre cross.
+        line(40, -0.08f, 0f, 0.08f, 0f, 0f)
+        line(40, 0f, -0.08f, 0f, 0.08f, 0f)
+        return out.toFloatArray()
+    }
 }

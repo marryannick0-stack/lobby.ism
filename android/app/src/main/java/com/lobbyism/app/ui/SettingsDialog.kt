@@ -18,6 +18,10 @@ class SettingsDialog(
     private val dialogs: Dialogs,
     private val onRotateCamera: () -> Unit,
     private val onRestartTutorial: () -> Unit,
+    /** Default edge length of the printed marker (cm), shown when nothing was measured. */
+    private val defaultMarkerCm: Double,
+    /** The measured marker size changed (cm). */
+    private val onMarkerSize: (Double) -> Unit,
 ) {
     fun show() {
         val url = EditText(activity).apply {
@@ -39,6 +43,16 @@ class SettingsDialog(
                 "Ohne Server-Adresse bleibt alles lokal auf diesem Gerät."
             setPadding(0, Theme.dp(activity, 12), 0, 0)
         }
+        val markerLabel = TextView(activity).apply {
+            text = "Marker: Kante des schwarzen Quadrats, nachgemessen in cm"
+            setPadding(0, Theme.dp(activity, 12), 0, 0)
+        }
+        val marker = EditText(activity).apply {
+            val cm = settings.markerSizeCm.takeIf { it > 0f }?.toDouble() ?: defaultMarkerCm
+            setText("%.1f".format(java.util.Locale.GERMANY, cm))
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setSingleLine()
+        }
         val rotate = Button(activity).apply {
             text = "Kamerabild um 90° drehen"
             setOnClickListener { onRotateCamera() }
@@ -53,13 +67,24 @@ class SettingsDialog(
         }
         dialog = dialogs.form(
             title = "Einstellungen",
-            views = listOf(url, key, info, rotate, restartTutorial),
+            views = listOf(url, key, info, markerLabel, marker, rotate, restartTutorial),
             confirm = "Speichern",
             dismiss = "Schließen",
         ) {
             settings.serverUrl = url.text.toString()
             settings.serverKey = key.text.toString()
             nodes.requestSync()
+            // Accept "15,8" and "15.8"; ignore nonsense outside a printable range.
+            val cm = marker.text.toString().replace(',', '.').toDoubleOrNull()
+            if (cm != null && cm in MARKER_MIN_CM..MARKER_MAX_CM) {
+                settings.markerSizeCm = cm.toFloat()
+                onMarkerSize(cm)
+            }
         }
+    }
+
+    private companion object {
+        const val MARKER_MIN_CM = 3.0
+        const val MARKER_MAX_CM = 100.0
     }
 }

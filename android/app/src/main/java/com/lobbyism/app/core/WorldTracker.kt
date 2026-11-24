@@ -54,9 +54,15 @@ class WorldTracker(private val cfg: Config) {
         val lockable: Boolean = true,
         /** Glitch with no lock at all; a full lock steadies it from here (gear tiers start lower). */
         val baseGlitch: Float = 1f,
+        /** > 0: this view is a detected room marker of that edge length (metres). */
+        val markerSizeM: Float = 0f,
+        /** Full orientation for objects that need more than a yaw (markers). Column-major 4x4. */
+        val rotation: FloatArray? = null,
     ) {
-        fun withLock(glitch: Float, lock: Float, revealed: Boolean) =
-            NodeView(node, stage, pos, distanceM, glitch, materialize, lock, revealed, home, gear, yawDeg, lockable, baseGlitch)
+        fun withLock(glitch: Float, lock: Float, revealed: Boolean) = NodeView(
+            node, stage, pos, distanceM, glitch, materialize, lock, revealed,
+            home, gear, yawDeg, lockable, baseGlitch, markerSizeM, rotation,
+        )
     }
 
     sealed class Event {

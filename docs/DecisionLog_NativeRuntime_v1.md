@@ -1,6 +1,6 @@
 # LOBBYISM — Decision Log: Native Runtime (Unity-Ablösung)
 
-**Version:** 1.2
+**Version:** 1.3
 **Datum:** 24. November 2026 (Erstfassung 16. November 2026)
 **Status:** Entschieden für Phase 0a. Offene Punkte am Ende.
 **Autorität:** Überschreibt den Abschnitt „Tech Stack" und die Client-Struktur in `CLAUDE.md` sowie Engine-Angaben in GDD v2–v4. Gameplay-Regeln (R1–R6), Node-Datenmodell und Phasenplan bleiben unverändert gültig.
@@ -140,6 +140,37 @@
 
 ---
 
+## ENTSCHIEDEN — N9: Startbildschirm und Raum-Marker (AprilTag)
+
+**Problem 1:** Die App startete direkt mit der Kamera. Kein Überblick, Kamera und GPS liefen auch ohne Bedarf.
+
+**Entscheidung 1:** Startbildschirm mit Modi DRAUSSEN, HOME-BASE, TUTORIAL, EINSTELLUNGEN. Kamera und Rendering laufen nur in einem Modus, GPS nur draußen. Zurück-Taste und ◂ führen zum Menü.
+
+**Problem 2:** Base-Building drinnen braucht einen Raumbezug, der beim Herumgehen hält. Die Stationen (N8) gelten nur vom Standpunkt aus.
+
+**Geprüfte Optionen:**
+
+| Option | Ergebnis |
+|---|---|
+| Raum durch Zielen vermessen | einfach, aber weiter nur vom Standpunkt aus richtig |
+| **Gedruckter Marker (AprilTag)** | **genaue 6DoF-Pose, frei begehbar, offen (BSD-2), läuft auf Handy-CPUs** |
+| KI-Tiefenschätzung | braucht Googles LiteRT-Laufzeit, widerspricht N1 |
+| Kamera-Tracking (OpenVINS) | Wochen Aufwand, Ausgang am Gerät ungewiss |
+
+**Entscheidung 2:** AprilTag 3.4.5, Familie tag36h11, als Quellcode im Projekt (keine Paketabhängigkeit), dazu eine schlanke JNI-Brücke. Zweiter Kamerastrom in Graustufen (4:3, ~1280×960), Erkennung mit höchstens 12 Bildern pro Sekunde. Druckvorlage mit 16 cm Kantenlänge, nachgemessene Größe in den Einstellungen.
+
+**Lokal geprüft:** Synthetischer Test mit bekannter Pose: 5 von 6 Fällen auf unter 2 cm und 0,5° genau. Grenzfall 3 m Abstand: Position 2,4 cm, Ausrichtung ~5° ungenau (bekannte Mehrdeutigkeit kleiner Marker). Folge für Stufe 2: Ausrichtung vom Gyro, vom Marker nur Position und Richtungsbezug.
+
+**Regelbruch, bewusst:**
+
+| Regel | Bruch | Wirkung | Passt zur Absicht |
+|---|---|---|---|
+| Keine Bibliotheken (N1) | AprilTag als Quellcode | erste fremde Codebasis, nativer Build nötig | ja: offen, keine Firma dahinter, keine Laufzeit-Abhängigkeit, austauschbar |
+
+**Stufenplan:** 1) Erkennen und anzeigen ✅ · 2) Raum-Koordinaten aus dem Marker, eigene Position im Raum, Blöcke im Raster · 3) mehrere Marker pro Raum, Optik-Feinschliff.
+
+---
+
 ## Zusammenfassung
 
 | # | Entscheidung | Status |
@@ -153,6 +184,7 @@
 | N6 | SensoryFeedback + Glitch | ✅ umgesetzt |
 | N7 | Schichtenarchitektur, Feld-Karte, CLAUDE.md, CI-Prüfungen | ✅ umgesetzt |
 | N8 | Home-Base: Objekttypen, Rüstungsständer, Stash, Tragen/Abstellen | ✅ umgesetzt, ungetestet am Gerät |
+| N9 | Startbildschirm; Raum-Marker Stufe 1 (erkennen, anzeigen) | ✅ umgesetzt, ungetestet am Gerät |
 
 ## Offene Punkte
 
@@ -167,5 +199,6 @@
 ---
 
 *v1.0 — 16.11.2026 — Erstfassung nach Umstellung auf native Runtime.*
+*v1.3 — 24.11.2026 — N9 ergänzt: Startbildschirm und AprilTag-Raum-Marker.*
 *v1.2 — 24.11.2026 — N8 ergänzt: Home-Base als begehbarer Stash mit Prototyp-Gear.*
 *v1.1 — 24.11.2026 — N7 ergänzt: Schichtenarchitektur und Arbeitsweise pro Feld. Home-Base (Stationen) und Tutorial sind seit Build 2/3 umgesetzt.*

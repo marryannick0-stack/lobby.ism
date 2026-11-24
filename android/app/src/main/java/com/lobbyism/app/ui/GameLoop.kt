@@ -2,8 +2,11 @@ package com.lobbyism.app.ui
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import com.lobbyism.app.camera.MarkerTracker
 import com.lobbyism.app.core.Config
 import com.lobbyism.app.core.HeadingEstimator
+import com.lobbyism.app.core.MarkerViews
 import com.lobbyism.app.core.Node
 import com.lobbyism.app.core.WorldTracker
 import com.lobbyism.app.data.NodeRepository
@@ -26,13 +29,14 @@ import com.lobbyism.app.ui.tutorial.TutorialController
  * main thread goes through [main].
  */
 class GameLoop(
-    cfg: Config,
+    private val cfg: Config,
     private val orientation: OrientationTracker,
     private val location: LocationTracker,
     private val nodes: NodeRepository,
     private val home: HomeController,
     private val tutorial: TutorialController,
     private val pose: PoseCache,
+    private val markers: MarkerTracker,
     private val hud: HudView,
     /** Main thread: a lock completed on this node. */
     private val onLocked: (Node) -> Unit,
@@ -49,6 +53,10 @@ class GameLoop(
     @Volatile private var headingConfidence = 0f
     // Written on the GL thread, read on the main thread.
     @Volatile private var lastSensorAzimuthDeg: Double? = null
+
+    // Marker views are rebuilt only when the tracker publishes a new result (GL thread only).
+    private var markerSource: MarkerTracker.Sightings? = null
+    private var markerViews: List<WorldTracker.NodeView> = emptyList()
 
     /** Main thread: every GPS fix may teach the heading estimator where north is (rule R2: no compass). */
     fun onGpsFix(fix: LocationTracker.Fix) {
@@ -90,6 +98,14 @@ class GameLoop(
             }
         }
 
+        // Home base: detected room markers are drawn on top of the objects.
+        val markerList = if (inHome) currentMarkers() else emptyList()
+        val views = when {
+            frame == null -> markerList
+            markerList.isEmpty() -> frame.views
+            else -> frame.views + markerList
+        }
+
         val turnDeg = if (inHome) {
             null
         } else {
@@ -111,9 +127,28 @@ class GameLoop(
             focusRevealed = frame?.focus?.revealed ?: false,
             sensorOk = orientation.isAvailable,
             turnDeg = turnDeg,
-            homeLines = if (inHome) home.statusLines(frame?.views?.size ?: 0) else null,
+            homeLines = if (inHome) home.statusLines(frame?.views?.size ?: 0) + markerLine(markerList) else null,
         )
-        return frame?.views ?: emptyList()
+        return views
+    }
+
+    /** Fresh marker sightings as views; stale ones count as "not in view". */
+    private fun currentMarkers(): List<WorldTracker.NodeView> {
+        val s = markers.sightings
+        if (SystemClock.elapsedRealtime() - s.timeMs > cfg.markerStaleMs) return emptyList()
+        if (s !== markerSource) {
+            markerSource = s
+            markerViews = MarkerViews.of(s.markers, markers.markerSizeM)
+        }
+        return markerViews
+    }
+
+    private fun markerLine(views: List<WorldTracker.NodeView>): String = when {
+        !markers.isAvailable -> "MARKER: AUF DIESEM GER\u00c4T NICHT VERF\u00dcGBAR"
+        views.isEmpty() -> "MARKER: KEINER IM BILD"
+        else -> views.joinToString(" \u00b7 ") { v ->
+            "MARKER #${v.node.id.substringAfter(':')} ${"%.1f".format(java.util.Locale.GERMANY, v.distanceM)} M"
+        }
     }
 
     private companion object {

@@ -30,6 +30,11 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("intro_seen", false)
         set(v) = prefs.edit().putBoolean("intro_seen", v).apply()
 
+    /** Measured edge of the printed marker's black square in cm; 0 = use the configured default. */
+    var markerSizeCm: Float
+        get() = prefs.getFloat("marker_size_cm", 0f)
+        set(v) = prefs.edit().putFloat("marker_size_cm", v).apply()
+
     var tutorialDone: Boolean
         get() = prefs.getBoolean("tutorial_done", false)
         set(v) = prefs.edit().putBoolean("tutorial_done", v).apply()

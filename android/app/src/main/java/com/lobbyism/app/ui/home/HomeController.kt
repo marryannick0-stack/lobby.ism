@@ -84,9 +84,14 @@ class HomeController(
 
     // ----------------------------------------------------------- main thread
 
-    /** The home button: enter (choose a station) or leave. */
-    fun toggle() {
-        if (active) leave() else pickStation()
+    /** Coming from the start screen: choose a station. [onCancel] = nothing chosen, back to the menu. */
+    fun enterFromMenu(onCancel: () -> Unit) {
+        pickStation(onCancel)
+    }
+
+    /** Leaving to the start screen. */
+    fun exit() {
+        if (active || carry != null) leave()
     }
 
     /** The main action button while home mode is on. */
@@ -285,16 +290,17 @@ class HomeController(
 
     // ------------------------------------------------------------- stations
 
-    private fun pickStation() {
+    private fun pickStation(onCancel: (() -> Unit)? = null) {
         val stations = repo.stations()
-        val labels = stations.map { "${it.name}  ·  Bezug: ${it.reference}" } + "+ Neue Station anlegen"
-        dialogs.choose("Home-Base: Wo stehst du?", labels) { which ->
-            if (which < stations.size) enter(stations[which]) else createStation()
+        val labels = stations.map { "${it.name}  \u00b7  Bezug: ${it.reference}" } + "+ Neue Station anlegen"
+        dialogs.choose("Home-Base: Wo stehst du?", labels, onCancel = onCancel) { which ->
+            if (which < stations.size) enter(stations[which]) else createStation(onCancel)
         }
     }
 
-    private fun createStation() {
+    private fun createStation(onCancel: (() -> Unit)? = null) {
         dialogs.fields(
+            onCancel = onCancel,
             title = "Neue Station",
             info = "Stell dich an die Stelle, von der aus du die Objekte sehen willst.\n\n" +
                 "Der Bezugspunkt muss sich nie bewegen und von hier gut sichtbar sein: " +

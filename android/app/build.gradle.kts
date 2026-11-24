@@ -14,6 +14,18 @@ android {
         // The CI run number makes every build newer than the last, so updates install over each other.
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.0a-" + (System.getenv("GITHUB_RUN_NUMBER") ?: "local")
+
+        // Native marker detector (src/main/cpp). Phones only: 64-bit and older 32-bit ARM.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     signingConfigs {

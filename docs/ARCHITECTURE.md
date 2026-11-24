@@ -31,9 +31,11 @@ Rules behind this: see `CLAUDE.md` → Architecture rules.
 | Sky pillar (light beam) | `core/WorldTracker.kt` (Stage.PILLAR) | `ui/GameLoop.kt` | `render/NodeGeometry.pillar`, `ArRenderer` constants `PILLAR_*` | `pillarMaxDistanceM` |
 | Gyro lock | `core/LockEngine.kt` | `ui/HudView.kt` reticle | `feedback/*` cues `LOCK_*` | `lockAngleDeg`, `lockTimeS`, `lockDecayS` |
 | North without compass | `core/HeadingEstimator.kt` | `ui/GameLoop.onGpsFix` | HUD "NORD SYNC" | `heading*` |
-| Leave a message | `data/NodeRepository.placeText` | `ui/MainActivity.askForText` | `ui/ContentCard.kt` | `textMaxChars`, `placeMaxAccuracyM` |
 | Home base: stations, notes, carrying, floor placement | `core/HomeBase.kt` | `ui/home/HomeController.kt`, `ui/ActionButtons.kt` | warm colour + calm pulse in `ArRenderer` | `homePinDistanceM`, `homeNodeSizeM`, `homeGear*DistanceM` |
 | Gear and stash (prototype stock) | `core/Gear.kt`, `data/HomeRepository.kt` | `ui/home/HomeController.kt` (stash dialogs), `ui/ContentCard.kt` | `render/GearGeometry.kt`, `ArRenderer.drawStand` | `gearStandHeightM`, `gearTierGlitch`, `stashSlots` |
+| Start screen and modes (MENU, OUTDOOR, HOME) | — | `ui/MainActivity.kt` (mode switch), `ui/StartScreen.kt` | `ui/StartScreen.kt` | — |
+| Room markers (AprilTag) | `core/CameraGeometry.kt`, `core/MarkerViews.kt` | `camera/MarkerTracker.kt`, `camera/MarkerNative.kt`, `cpp/lobbyism_marker.c`, `ui/GameLoop.currentMarkers` | `render/NodeGeometry.markerFrame` | `marker*`; measured size in Settings; print template `docs/marker/` |
+| Leave a message outdoors | `data/NodeRepository.placeText` | `ui/outdoor/OutdoorController.kt` | `ui/ContentCard.kt` | `textMaxChars`, `placeMaxAccuracyM` |
 | Tutorial / calibration walk | `core/Tutorial.kt` | `ui/tutorial/*` | `ui/tutorial/TutorialOverlay.kt` | `tutorial.*` |
 | Glitch look | — | — | `render/Shaders.kt` COMPOSITE, `ArRenderer.onCue` | `layerScale` |
 | Haptics and sound | — | — | `feedback/Haptics.kt`, `feedback/SignalAudio.kt` | — |

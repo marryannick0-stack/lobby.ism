@@ -382,3 +382,73 @@ class GearTest {
         assertEquals(0.55f * 0.15f, LockEngine.glitchFor(1f, 0.55f), 1e-6f)
     }
 }
+
+class CameraGeometryTest {
+    private fun det(m: DoubleArray) =
+        m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6])
+
+    @Test fun cameraToDeviceIsAProperRotationForEveryOrientation() {
+        for (o in intArrayOf(0, 90, 180, 270)) assertEquals("orientation $o", 1.0, det(CameraGeometry.cameraToDevice(o)), 1e-12)
+    }
+
+    @Test fun typicalBackCameraAxes() {
+        // SENSOR_ORIENTATION 90, the usual back camera.
+        val m = CameraGeometry.cameraToDevice(90)
+        // Straight ahead in the image = out of the phone's back.
+        val ahead = CameraGeometry.apply(m, doubleArrayOf(0.0, 0.0, 1.0))
+        assertEquals(-1.0, ahead[2], 1e-12)
+        // Raw -x is "up" in the upright picture = device +y.
+        val up = CameraGeometry.apply(m, doubleArrayOf(-1.0, 0.0, 0.0))
+        assertEquals(1.0, up[1], 1e-12)
+        // Raw +y (down in the raw image) points to the device's left on screen.
+        val rawDown = CameraGeometry.apply(m, doubleArrayOf(0.0, 1.0, 0.0))
+        assertEquals(-1.0, rawDown[0], 1e-12)
+    }
+
+    @Test fun markerAheadOfAnUprightPhoneLandsAheadInTheWorld() {
+        // Phone upright, screen facing -y, camera looking along world +y.
+        val deviceToWorld = doubleArrayOf(
+            1.0, 0.0, 0.0,
+            0.0, 0.0, -1.0,
+            0.0, 1.0, 0.0,
+        )
+        val identity = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+        val m = CameraGeometry.markerInWorld(0, identity, doubleArrayOf(0.0, 0.0, 2.0), deviceToWorld, CameraGeometry.cameraToDevice(90))
+        assertEquals(0.0, m.position[0], 1e-9)
+        assertEquals(2.0, m.position[1], 1e-9)
+        assertEquals(0.0, m.position[2], 1e-9)
+        assertEquals(2.0, m.distanceM, 1e-9)
+        assertEquals(1.0, det(m.rotation), 1e-9)
+    }
+
+    @Test fun intrinsicsScaleFromTheActiveArray() {
+        val cal = floatArrayOf(3000f, 3000f, 2000f, 1500f, 0f)
+        val k = CameraGeometry.intrinsics(1280, 960, 4000, 3000, cal, 0f, 0f)
+        assertEquals(960.0, k.fx, 1e-9)
+        assertEquals(640.0, k.cx, 1e-9)
+        assertEquals(480.0, k.cy, 1e-9)
+        // 16:9 stream from a 4:3 sensor: top and bottom are cropped, cy shifts accordingly.
+        val w = CameraGeometry.intrinsics(1280, 720, 4000, 3000, cal, 0f, 0f)
+        assertEquals(360.0, w.cy, 1e-9)
+        // No calibration: focal length over sensor width.
+        val f = CameraGeometry.intrinsics(1280, 960, 4000, 3000, null, 4.0f, 5.0f)
+        assertEquals(1024.0, f.fx, 1e-6)
+        assertEquals(640.0, f.cx, 1e-9)
+    }
+}
+
+class MarkerViewsTest {
+    @Test fun rotationBecomesColumnMajorAndViewIsNotLockable() {
+        // 90 deg about z: x -> y.
+        val r = doubleArrayOf(0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+        val v = MarkerViews.view(CameraGeometry.MarkerPose(3, doubleArrayOf(0.0, 2.0, 0.0), r, 2.0), 0.16)
+        val m = v.rotation!!
+        // Column 0 (x axis image) must be (0, 1, 0).
+        assertEquals(0f, m[0], 1e-6f)
+        assertEquals(1f, m[1], 1e-6f)
+        assertEquals(1f, m[15], 1e-6f)
+        assertFalse(v.lockable)
+        assertEquals(0.16f, v.markerSizeM, 1e-6f)
+        assertEquals(2f, v.pos[1], 1e-6f)
+    }
+}

@@ -71,6 +71,8 @@ class ArRenderer(
     private val partCounts = IntArray(GearType.values().size)
     private var auraBuffer = 0
     private var auraCount = 0
+    private var markerBuffer = 0
+    private var markerCount = 0
 
     // Uniform/attribute locations of the point program, looked up once per GL context.
     private var aPos = 0
@@ -159,6 +161,9 @@ class ArRenderer(
             partCounts[type.ordinal] = part.size / NodeGeometry.FLOATS_PER_VERTEX
             partBuffers[type.ordinal] = GlUtil.staticBuffer(part)
         }
+        val marker = NodeGeometry.markerFrame()
+        markerCount = marker.size / NodeGeometry.FLOATS_PER_VERTEX
+        markerBuffer = GlUtil.staticBuffer(marker)
         val aura = GearGeometry.aura(AURA_POINTS)
         auraCount = aura.size / NodeGeometry.FLOATS_PER_VERTEX
         auraBuffer = GlUtil.staticBuffer(aura)
@@ -333,6 +338,15 @@ class ArRenderer(
 
         for (v in views) {
             when {
+                v.markerSizeM > 0f && v.rotation != null -> {
+                    // Room marker: outline exactly on the printed square, full 3D orientation.
+                    Matrix.setIdentityM(model, 0)
+                    Matrix.translateM(model, 0, v.pos[0], v.pos[1], v.pos[2])
+                    Matrix.multiplyMM(tmp, 0, model, 0, v.rotation, 0)
+                    System.arraycopy(tmp, 0, model, 0, 16)
+                    Matrix.scaleM(model, 0, v.markerSizeM, v.markerSizeM, v.markerSizeM)
+                    drawCloud(markerBuffer, markerCount, v.glitch, 1f, 0f, MARKER_POINT_M, PHOSPHOR, 0.6f)
+                }
                 v.gear != null -> drawStand(v, v.gear.type, v.gear.tier)
                 v.stage == WorldTracker.Stage.MATERIALIZED -> {
                     // The node stays in place; only its fragments turn slowly around the vertical axis.
@@ -455,6 +469,7 @@ class ArRenderer(
         const val PART_POINT_M = 0.016f
         const val PART_GLITCH_FACTOR = 0.7f
         const val AURA_GLITCH = 0.6f
+        const val MARKER_POINT_M = 0.006f
 
         // Colours (RGB 0..1). Pale phosphor, never neon; warm amber marks private home objects.
         val PHOSPHOR = floatArrayOf(0.80f, 1.00f, 0.86f)

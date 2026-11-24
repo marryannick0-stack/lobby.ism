@@ -56,6 +56,13 @@ object ConfigLoader {
             homeGearMaxDistanceM = j.optDouble("homeGearMaxDistanceM", d.homeGearMaxDistanceM),
             gearTierGlitch = doubles(j.optJSONArray("gearTierGlitch"), d.gearTierGlitch),
             stashSlots = j.optInt("stashSlots", d.stashSlots),
+            markerSizeM = j.optDouble("markerSizeM", d.markerSizeM),
+            markerAnalysisWidth = j.optInt("markerAnalysisWidth", d.markerAnalysisWidth),
+            markerDecimate = j.optDouble("markerDecimate", d.markerDecimate),
+            markerThreads = j.optInt("markerThreads", d.markerThreads),
+            markerMaxFps = j.optInt("markerMaxFps", d.markerMaxFps),
+            markerMinMargin = j.optDouble("markerMinMargin", d.markerMinMargin),
+            markerStaleMs = j.optLong("markerStaleMs", d.markerStaleMs),
             tutorial = loadTutorial(j.optJSONObject("tutorial"), d.tutorial),
         )
     }
