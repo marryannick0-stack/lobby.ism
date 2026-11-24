@@ -35,6 +35,27 @@ jobs:
         working-directory: android
         run: gradle --no-daemon --stacktrace testDebugUnitTest lintDebug assembleDebug
 
+      # Lint findings in the log, so they can be read without downloading the report.
+      - name: Summarise lint findings
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import collections, os, xml.etree.ElementTree as ET
+          path = "android/app/build/reports/lint-results-debug.xml"
+          if not os.path.exists(path):
+              print("No lint report."); raise SystemExit
+          issues = list(ET.parse(path).getroot().iter("issue"))
+          count = collections.Counter((i.get("severity"), i.get("id")) for i in issues)
+          print(f"LINT: {len(issues)} findings")
+          for (sev, rule), n in count.most_common():
+              print(f"  {n:3d}  {sev:12s} {rule}")
+          for i in issues:
+              if i.get("severity") in ("Error", "Fatal"):
+                  loc = i.find("location")
+                  where = f"{loc.get('file').split('/app/')[-1]}:{loc.get('line')}" if loc is not None else ""
+                  print(f"  ERROR {i.get('id')} {where}: {i.get('message')}")
+          PY
+
       # Reports stay available for every run, also when a step above failed.
       - name: Keep test and lint reports
         if: always()
