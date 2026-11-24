@@ -55,6 +55,17 @@ Everything rendered lives in the sensor frame of `GAME_ROTATION_VECTOR`: origin 
 
 Schema changes: bump the version in `NodeStore`, add a step in `onUpgrade`, never edit an old step.
 
+Backups: `allowBackup=false` plus `res/xml/data_extraction_rules.xml` exclude all app data from cloud backup and device-to-device transfer, so private data cannot leave the phone that way either.
+
+## Open lint warnings (accepted for now)
+
+| Rule | Why accepted | Revisit when |
+|---|---|---|
+| SetTextI18n | UI text is German-only and built in code | adding a second language |
+| ViewConstructor | Views are created in code, never from XML | — |
+| LockedOrientationActivity | AR view is portrait by design | tablet support |
+| OldTargetApi | targetSdk 35 needs AGP upgrade for 36 | before any store release |
+
 ## Deliberate deviations from the Android guide
 
 | Guide says | We do | Why |
